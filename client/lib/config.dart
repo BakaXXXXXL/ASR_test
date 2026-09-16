@@ -1,7 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AppConfig {
-  static const String defaultBaseUrl = 'http://localhost:8000';
+  static const String defaultBaseUrl = 'https://api.xiaomimimo.com/v1';
   static const String defaultApiKey = '';
 
   String _baseUrl = defaultBaseUrl;

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -6,21 +7,28 @@ import '../config.dart';
 
 class TranscribeResult {
   final String text;
-  final double duration;
   final String? language;
 
-  TranscribeResult({
-    required this.text,
-    required this.duration,
-    this.language,
-  });
+  TranscribeResult({required this.text, this.language});
 
   factory TranscribeResult.fromJson(Map<String, dynamic> json) {
-    return TranscribeResult(
-      text: json['text'] as String,
-      duration: (json['duration'] as num).toDouble(),
-      language: json['language'] as String?,
-    );
+    final choices = json['choices'] as List<dynamic>?;
+    String text = '';
+    if (choices != null && choices.isNotEmpty) {
+      final message = choices[0]['message'];
+      if (message != null) {
+        final content = message['content'];
+        if (content is String) {
+          text = content;
+        } else if (content is List) {
+          text = content
+              .where((c) => c['type' ] == 'text')
+              .map((c) => c['text'])
+              .join();
+        }
+      }
+    }
+    return TranscribeResult(text: text);
   }
 }
 
@@ -33,43 +41,54 @@ class AsrService {
       baseUrl: config.baseUrl,
       connectTimeout: const Duration(seconds: 30),
       receiveTimeout: const Duration(minutes: 5),
+      headers: {
+        'Authorization': 'Bearer ${config.apiKey}',
+        'Content-Type': 'application/json',
+      },
     ));
-  }
-
-  Future<bool> checkHealth() async {
-    try {
-      final response = await _dio.get('/health');
-      return response.statusCode == 200 &&
-          response.data['model_loaded'] == true;
-    } catch (_) {
-      return false;
-    }
   }
 
   Future<TranscribeResult> transcribe(
     File file, {
     String language = 'auto',
   }) async {
-    final fileName = file.path.split(Platform.pathSeparator).last;
-    final formData = FormData.fromMap({
-      'file': await MultipartFile.fromFile(
-        file.path,
-        filename: fileName,
-      ),
-      'language': language,
-    });
-
-    final headers = <String, String>{};
-    if (config.apiKey.isNotEmpty) {
-      headers['X-API-Key'] = config.apiKey;
+    final bytes = await file.readAsBytes();
+    if (bytes.length > 10 * 1024 * 1024) {
+      throw Exception('文件过大（Base64 编码后不能超过 10MB）');
     }
 
-    final response = await _dio.post(
-      '/transcribe',
-      data: formData,
-      options: Options(headers: headers),
-    );
+    final suffix = file.path.split('.').last.toLowerCase();
+    String mimeType;
+    if (suffix == 'wav') {
+      mimeType = 'audio/wav';
+    } else if (suffix == 'mp3') {
+      mimeType = 'audio/mpeg';
+    } else {
+      throw Exception('仅支持 wav 和 mp3 格式');
+    }
 
+    final base64Audio = base64Encode(bytes);
+    final dataUrl = 'data:$mimeType;base64,$base64Audio';
+
+    final body = {
+      'model': 'mimo-v2.5-asr',
+      'messages': [
+        {
+          'role': 'user',
+          'content': [
+            {
+              'type': 'input_audio',
+              'input_audio': {'data': dataUrl},
+            }
+          ],
+        }
+      ],
+      'extra_body': {
+        'asr_options': {'language': language}
+      },
+    };
+
+    final response = await _dio.post('/chat/completions', data: body);
     return TranscribeResult.fromJson(response.data);
   }
 }

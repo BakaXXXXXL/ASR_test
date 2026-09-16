@@ -1,124 +1,109 @@
 # API 接口文档
 
-**Base URL**: `http://<server-host>:8000`
+本应用直接调用小米 MiMo 官方 API，接口为 OpenAI 兼容格式。
+
+**官方文档**: https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/audio/Speech-Recognition
+
+**Base URL**: `https://api.xiaomimimo.com/v1`
 
 ## 认证
 
-所有需要认证的接口通过请求头传递 API Key：
+通过 Bearer Token 认证：
 
 ```
-X-API-Key: your-secret-api-key
+Authorization: Bearer <your-mimo-api-key>
 ```
 
-如果服务端未配置 `API_KEY` 环境变量，则认证被禁用。
+API Key 在 https://platform.xiaomimimo.com/console 获取。
 
 ---
 
-## 接口列表
+## POST /chat/completions
 
-### GET /health
+音频转文字接口。
 
-健康检查接口，无需认证。
+### 请求体
 
-**请求**：
-```http
-GET /health HTTP/1.1
-```
-
-**响应** (200)：
 ```json
 {
-  "status": "ok",
-  "model_loaded": true
+  "model": "mimo-v2.5-asr",
+  "messages": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_audio",
+          "input_audio": {
+            "data": "data:audio/wav;base64,<BASE64_ENCODED_AUDIO>"
+          }
+        }
+      ]
+    }
+  ],
+  "extra_body": {
+    "asr_options": {
+      "language": "zh"
+    }
+  }
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| status | string | 服务状态，固定为 `"ok"` |
-| model_loaded | boolean | 模型是否已加载 |
-
----
-
-### POST /transcribe
-
-音频转文字接口，需要认证。
-
-**请求**：
-```http
-POST /transcribe HTTP/1.1
-Content-Type: multipart/form-data
-X-API-Key: your-secret-api-key
-```
-
-**请求参数** (form-data)：
+### 参数说明
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| file | File | 是 | 音频文件 |
-| language | string | 否 | 语言标签：`auto`（默认）/ `chinese` / `english` |
+| model | string | 是 | 固定为 `mimo-v2.5-asr` |
+| messages[].role | string | 是 | 固定为 `user` |
+| messages[].content[].type | string | 是 | 固定为 `input_audio` |
+| messages[].content[].input_audio.data | string | 是 | Data URL 格式的 Base64 音频 |
+| extra_body.asr_options.language | string | 否 | `auto`（默认）/ `zh` / `en` |
 
-**支持的音频格式**：
-`.wav`, `.mp3`, `.m4a`, `.flac`, `.ogg`, `.aac`, `.wma`, `.webm`
+### 音频格式要求
 
-**文件大小限制**：100MB
+- 仅支持 **wav** 和 **mp3** 格式
+- 需转换为 Base64 编码，编码后大小上限 **10MB**
+- Data URL 格式：
+  - wav: `data:audio/wav;base64,<BASE64>`
+  - mp3: `data:audio/mpeg;base64,<BASE64>`
 
-**响应** (200)：
+### 响应格式（非流式）
+
 ```json
 {
-  "text": "这是识别出来的文字内容。",
-  "duration": 2.35,
-  "language": "auto"
+  "choices": [
+    {
+      "message": {
+        "content": "这是识别出来的文字内容。"
+      }
+    }
+  ]
 }
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| text | string | 识别出的文字 |
-| duration | number | 识别耗时（秒） |
-| language | string | 使用的语言标签 |
+### 调用示例（Python）
 
-**错误响应**：
-
-| 状态码 | 说明 |
-|--------|------|
-| 400 | 不支持的音频格式 / 文件过大 |
-| 401 | API Key 无效 |
-| 500 | 识别过程出错 |
-| 503 | 模型未加载 |
-
-**错误响应示例** (400)：
-```json
-{
-  "detail": "Unsupported format: .txt. Supported: .aac, .flac, .m4a, .mp3, .ogg, .wma, .wav, .webm"
-}
-```
-
----
-
-## 调用示例
-
-### curl
-```bash
-curl -X POST http://localhost:8000/transcribe \
-  -H "X-API-Key: your-secret-api-key" \
-  -F "file=@/path/to/audio.wav" \
-  -F "language=auto"
-```
-
-### Python
 ```python
-import requests
+import os, base64
+from openai import OpenAI
 
-resp = requests.post(
-    "http://localhost:8000/transcribe",
-    headers={"X-API-Key": "your-secret-api-key"},
-    files={"file": open("audio.wav", "rb")},
-    data={"language": "auto"},
+client = OpenAI(
+    api_key=os.environ.get("MIMO_API_KEY"),
+    base_url="https://api.xiaomimimo.com/v1"
 )
-print(resp.json()["text"])
+
+with open("audio.wav", "rb") as f:
+    audio_b64 = base64.b64encode(f.read()).decode()
+
+completion = client.chat.completions.create(
+    model="mimo-v2.5-asr",
+    messages=[{
+        "role": "user",
+        "content": [{
+            "type": "input_audio",
+            "input_audio": {"data": f"data:audio/wav;base64,{audio_b64}"}
+        }]
+    }],
+    extra_body={"asr_options": {"language": "zh"}}
+)
+print(completion.choices[0].message.content)
 ```
-
-### 自动文档
-
-服务启动后访问 `http://localhost:8000/docs` 可查看 FastAPI 自动生成的交互式 API 文档（Swagger UI）。

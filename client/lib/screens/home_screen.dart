@@ -22,7 +22,6 @@ class _HomeScreenState extends State<HomeScreen> {
   String _result = '';
   bool _loading = false;
   String? _error;
-  bool _modelReady = false;
 
   late AsrService _asr;
 
@@ -30,20 +29,12 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _asr = AsrService(widget.config);
-    _checkHealth();
-  }
-
-  Future<void> _checkHealth() async {
-    final ready = await _asr.checkHealth();
-    if (mounted) {
-      setState(() => _modelReady = ready);
-    }
   }
 
   Future<void> _pickFile() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['wav', 'mp3', 'm4a', 'flac', 'ogg', 'aac', 'wma', 'webm'],
+      allowedExtensions: ['wav', 'mp3'],
     );
     if (result != null && result.files.single.path != null) {
       setState(() {
@@ -73,8 +64,17 @@ class _HomeScreenState extends State<HomeScreen> {
       }
     } on DioException catch (e) {
       if (mounted) {
+        String msg;
+        try {
+          msg = e.response?.data?['error']?['message']?.toString() ??
+              e.response?.data?['detail']?.toString() ??
+              e.message ??
+              '请求失败';
+        } catch (_) {
+          msg = e.message ?? '请求失败';
+        }
         setState(() {
-          _error = e.response?.data?['detail']?.toString() ?? e.message;
+          _error = msg;
           _loading = false;
         });
       }
@@ -98,7 +98,6 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _showSettings() {
-    final urlCtrl = TextEditingController(text: widget.config.baseUrl);
     final keyCtrl = TextEditingController(text: widget.config.apiKey);
 
     showDialog(
@@ -109,18 +108,10 @@ class _HomeScreenState extends State<HomeScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
-              controller: urlCtrl,
-              decoration: const InputDecoration(
-                labelText: 'API 地址',
-                hintText: 'http://localhost:8000',
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
               controller: keyCtrl,
               decoration: const InputDecoration(
-                labelText: 'API Key',
-                hintText: '留空表示无需认证',
+                labelText: 'MiMo API Key',
+                hintText: '从 platform.xiaomimimo.com 获取',
               ),
               obscureText: true,
             ),
@@ -133,13 +124,9 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           FilledButton(
             onPressed: () async {
-              await widget.config.save(
-                baseUrl: urlCtrl.text.trim(),
-                apiKey: keyCtrl.text.trim(),
-              );
+              await widget.config.save(apiKey: keyCtrl.text.trim());
               _asr = AsrService(widget.config);
               if (ctx.mounted) Navigator.pop(ctx);
-              _checkHealth();
             },
             child: const Text('保存'),
           ),
@@ -172,19 +159,27 @@ class _HomeScreenState extends State<HomeScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Status indicator
+            // API Key status
             Row(
               children: [
                 Icon(
-                  _modelReady ? Icons.check_circle : Icons.error_outline,
-                  color: _modelReady ? Colors.green : Colors.orange,
+                  widget.config.apiKey.isNotEmpty
+                      ? Icons.vpn_key
+                      : Icons.key_off,
+                  color: widget.config.apiKey.isNotEmpty
+                      ? Colors.green
+                      : Colors.orange,
                   size: 20,
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  _modelReady ? '模型就绪' : '模型未就绪',
+                  widget.config.apiKey.isNotEmpty
+                      ? 'API Key 已配置'
+                      : '请先配置 API Key',
                   style: TextStyle(
-                    color: _modelReady ? Colors.green : Colors.orange,
+                    color: widget.config.apiKey.isNotEmpty
+                        ? Colors.green
+                        : Colors.orange,
                   ),
                 ),
               ],
@@ -195,7 +190,7 @@ class _HomeScreenState extends State<HomeScreen> {
             OutlinedButton.icon(
               onPressed: _loading ? null : _pickFile,
               icon: const Icon(Icons.audio_file),
-              label: const Text('选择音频文件'),
+              label: const Text('选择音频文件（wav / mp3）'),
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 16),
               ),
@@ -233,8 +228,8 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
               items: const [
                 DropdownMenuItem(value: 'auto', child: Text('自动检测')),
-                DropdownMenuItem(value: 'chinese', child: Text('中文')),
-                DropdownMenuItem(value: 'english', child: Text('English')),
+                DropdownMenuItem(value: 'zh', child: Text('中文')),
+                DropdownMenuItem(value: 'en', child: Text('English')),
               ],
               onChanged: _loading
                   ? null
@@ -244,7 +239,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
             // Transcribe button
             FilledButton.icon(
-              onPressed: (_selectedFile != null && !_loading) ? _transcribe : null,
+              onPressed:
+                  (_selectedFile != null && !_loading && widget.config.apiKey.isNotEmpty)
+                      ? _transcribe
+                      : null,
               icon: _loading
                   ? const SizedBox(
                       width: 20,
