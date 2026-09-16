@@ -1,0 +1,25 @@
+name: asr_client
+description: ASR Speech-to-Text Client powered by MiMo-V2.5-ASR
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dio: ^5.7.0
+  file_picker: ^8.3.7
+  audioplayers: ^6.1.0
+  path_provider: ^2.1.5
+  shared_preferences: ^2.3.4
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
