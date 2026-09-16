@@ -50,14 +50,24 @@ jobs:
           rm -rf windows
           flutter create . --platforms=windows --org com.asr.client --project-name asr_client
 
+      - name: Force VS 2022 generator in Flutter config
+        shell: pwsh
+        run: |
+          $configFile = "windows/flutter/ephemeral/generated_config.cmake"
+          if (Test-Path $configFile) {
+            $content = Get-Content $configFile -Raw
+            $content = $content -replace 'Visual Studio 16 2019', 'Visual Studio 17 2022'
+            Set-Content $configFile $content -NoNewline
+            Write-Host "Patched generated_config.cmake for VS 2022"
+          } else {
+            Write-Host "WARNING: generated_config.cmake not found"
+          }
+
       - run: flutter pub get
 
       - name: Build Windows Release
         shell: pwsh
         run: |
-          Remove-Item windows/CMakeCache.txt -Force -ErrorAction SilentlyContinue
-          Remove-Item windows/CMakeFiles -Recurse -Force -ErrorAction SilentlyContinue
-          Remove-Item windows/flutter/ephemeral -Recurse -Force -ErrorAction SilentlyContinue
           $env:CMAKE_GENERATOR = "Visual Studio 17 2022"
           flutter build windows --release
 
