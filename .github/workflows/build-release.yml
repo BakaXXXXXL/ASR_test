@@ -52,7 +52,11 @@ jobs:
 
       - run: flutter pub get
 
-      - run: flutter build windows --release
+      - name: Build Windows Release
+        shell: pwsh
+        run: |
+          $env:CMAKE_GENERATOR = "Visual Studio 17 2022"
+          flutter build windows --release
 
       - name: Create zip
         shell: pwsh
