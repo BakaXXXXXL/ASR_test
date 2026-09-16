@@ -39,8 +39,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: ilammy/msvc-dev-cmd@v1
-
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.29.3'
@@ -48,7 +46,9 @@ jobs:
 
       - run: flutter pub get
 
-      - run: flutter build windows --release
+      - name: Build Windows Release
+        shell: bash
+        run: CMAKE_GENERATOR="Visual Studio 17 2022" flutter build windows --release
 
       - name: Create zip
         shell: pwsh
