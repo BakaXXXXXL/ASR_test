@@ -44,12 +44,6 @@ jobs:
           flutter-version: '3.32.4'
           channel: 'stable'
 
-      - name: Regenerate Windows platform files
-        shell: bash
-        run: |
-          rm -rf windows
-          flutter create . --platforms=windows --org com.asr.client --project-name asr_client
-
       - run: flutter pub get
 
       - name: Build Windows Release
