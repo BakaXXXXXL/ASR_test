@@ -50,6 +50,8 @@ jobs:
         shell: pwsh
         run: |
           $env:CMAKE_GENERATOR = "Visual Studio 17 2022"
+          if (Test-Path windows/CMakeCache.txt) { Remove-Item windows/CMakeCache.txt -Force }
+          if (Test-Path windows/CMakeFiles) { Remove-Item windows/CMakeFiles -Recurse -Force }
           flutter build windows --release
 
       - name: Create zip
