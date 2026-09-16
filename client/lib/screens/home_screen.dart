@@ -18,6 +18,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   File? _selectedFile;
+  String _fileName = '';
+  int _fileSize = 0;
   String _language = 'auto';
   String _result = '';
   bool _loading = false;
@@ -37,8 +39,11 @@ class _HomeScreenState extends State<HomeScreen> {
       allowedExtensions: ['wav', 'mp3'],
     );
     if (result != null && result.files.single.path != null) {
+      final file = File(result.files.single.path!);
       setState(() {
-        _selectedFile = File(result.files.single.path!);
+        _selectedFile = file;
+        _fileName = result.files.single.name;
+        _fileSize = result.files.single.size;
         _error = null;
         _result = '';
       });
@@ -68,8 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
         try {
           msg = e.response?.data?['error']?['message']?.toString() ??
               e.response?.data?['detail']?.toString() ??
-              e.message ??
-              '请求失败';
+              e.message ?? '请求失败';
         } catch (_) {
           msg = e.message ?? '请求失败';
         }
@@ -92,45 +96,70 @@ class _HomeScreenState extends State<HomeScreen> {
     if (_result.isNotEmpty) {
       Clipboard.setData(ClipboardData(text: _result));
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已复制到剪贴板')),
+        SnackBar(
+          content: const Text('已复制到剪贴板'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
       );
     }
   }
 
   void _showSettings() {
     final keyCtrl = TextEditingController(text: widget.config.apiKey);
+    bool obscure = true;
 
     showDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('API 设置'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: keyCtrl,
-              decoration: const InputDecoration(
-                labelText: 'MiMo API Key',
-                hintText: '从 platform.xiaomimimo.com 获取',
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.tune, size: 22),
+              SizedBox(width: 8),
+              Text('API 设置'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: keyCtrl,
+                decoration: InputDecoration(
+                  labelText: 'MiMo API Key',
+                  hintText: '从 platform.xiaomimimo.com 获取',
+                  suffixIcon: IconButton(
+                    icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
+                    onPressed: () => setDialogState(() => obscure = !obscure),
+                  ),
+                ),
+                obscureText: obscure,
               ),
-              obscureText: true,
+              const SizedBox(height: 8),
+              Text(
+                'API 地址: ${widget.config.baseUrl}',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Colors.grey,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                await widget.config.save(apiKey: keyCtrl.text.trim());
+                _asr = AsrService(widget.config);
+                if (ctx.mounted) Navigator.pop(ctx);
+                setState(() {});
+              },
+              child: const Text('保存'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              await widget.config.save(apiKey: keyCtrl.text.trim());
-              _asr = AsrService(widget.config);
-              if (ctx.mounted) Navigator.pop(ctx);
-            },
-            child: const Text('保存'),
-          ),
-        ],
       ),
     );
   }
@@ -143,183 +172,315 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final hasKey = widget.config.apiKey.isNotEmpty;
+
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('ASR 语音转文字'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.settings),
-            onPressed: _showSettings,
-            tooltip: 'API 设置',
-          ),
-        ],
-      ),
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // API Key status
-            Row(
-              children: [
-                Icon(
-                  widget.config.apiKey.isNotEmpty
-                      ? Icons.vpn_key
-                      : Icons.key_off,
-                  color: widget.config.apiKey.isNotEmpty
-                      ? Colors.green
-                      : Colors.orange,
-                  size: 20,
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  widget.config.apiKey.isNotEmpty
-                      ? 'API Key 已配置'
-                      : '请先配置 API Key',
-                  style: TextStyle(
-                    color: widget.config.apiKey.isNotEmpty
-                        ? Colors.green
-                        : Colors.orange,
+      body: Column(
+        children: [
+          // Top bar
+          Container(
+            padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
+            decoration: BoxDecoration(
+              color: cs.surface,
+              border: Border(
+                bottom: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.5)),
+              ),
+            ),
+            child: SafeArea(
+              bottom: false,
+              child: Row(
+                children: [
+                  Icon(Icons.mic, color: cs.primary, size: 24),
+                  const SizedBox(width: 10),
+                  Text(
+                    'ASR 语音转文字',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-
-            // File selection
-            OutlinedButton.icon(
-              onPressed: _loading ? null : _pickFile,
-              icon: const Icon(Icons.audio_file),
-              label: const Text('选择音频文件（wav / mp3）'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-            ),
-            if (_selectedFile != null) ...[
-              const SizedBox(height: 12),
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        _selectedFile!.path.split(Platform.pathSeparator).last,
-                        style: const TextStyle(fontWeight: FontWeight.bold),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: cs.primaryContainer,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      'MiMo-V2.5',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        color: cs.onPrimaryContainer,
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '大小: ${_formatSize(_selectedFile!.lengthSync())}',
-                        style: TextStyle(color: Colors.grey[600]),
-                      ),
-                    ],
+                    ),
                   ),
-                ),
-              ),
-            ],
-            const SizedBox(height: 16),
-
-            // Language selector
-            DropdownButtonFormField<String>(
-              value: _language,
-              decoration: const InputDecoration(
-                labelText: '语言',
-                border: OutlineInputBorder(),
-              ),
-              items: const [
-                DropdownMenuItem(value: 'auto', child: Text('自动检测')),
-                DropdownMenuItem(value: 'zh', child: Text('中文')),
-                DropdownMenuItem(value: 'en', child: Text('English')),
-              ],
-              onChanged: _loading
-                  ? null
-                  : (v) => setState(() => _language = v ?? 'auto'),
-            ),
-            const SizedBox(height: 24),
-
-            // Transcribe button
-            FilledButton.icon(
-              onPressed:
-                  (_selectedFile != null && !_loading && widget.config.apiKey.isNotEmpty)
-                      ? _transcribe
-                      : null,
-              icon: _loading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: Colors.white,
-                      ),
-                    )
-                  : const Icon(Icons.transcribe),
-              label: Text(_loading ? '识别中...' : '开始识别'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 16),
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Error display
-            if (_error != null)
-              Card(
-                color: Colors.red[50],
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      Icon(Icons.error, color: Colors.red[700]),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          _error!,
-                          style: TextStyle(color: Colors.red[700]),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-            // Result display
-            if (_result.isNotEmpty)
-              Expanded(
-                child: Card(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  const Spacer(),
+                  // API Key indicator
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: hasKey
+                          ? Colors.green.withValues(alpha: 0.1)
+                          : cs.errorContainer,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Row(
-                          children: [
-                            const Text(
-                              '识别结果',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const Spacer(),
-                            IconButton(
-                              icon: const Icon(Icons.copy),
-                              onPressed: _copyResult,
-                              tooltip: '复制结果',
-                            ),
-                          ],
+                        Icon(
+                          hasKey ? Icons.check_circle_outline : Icons.warning_amber,
+                          size: 14,
+                          color: hasKey ? Colors.green.shade700 : cs.error,
                         ),
-                        const Divider(),
-                        Expanded(
-                          child: SingleChildScrollView(
-                            child: SelectableText(_result),
+                        const SizedBox(width: 4),
+                        Text(
+                          hasKey ? '已连接' : '未配置 Key',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: hasKey ? Colors.green.shade700 : cs.error,
                           ),
                         ),
                       ],
                     ),
                   ),
+                  const SizedBox(width: 8),
+                  IconButton(
+                    icon: const Icon(Icons.settings, size: 20),
+                    onPressed: _showSettings,
+                    tooltip: 'API 设置',
+                    style: IconButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Main content
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 560),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // File picker area
+                      InkWell(
+                        onTap: _loading ? null : _pickFile,
+                        borderRadius: BorderRadius.circular(12),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: _selectedFile != null
+                                  ? cs.primary.withValues(alpha: 0.4)
+                                  : cs.outlineVariant,
+                              width: _selectedFile != null ? 2 : 1,
+                            ),
+                            color: _selectedFile != null
+                                ? cs.primaryContainer.withValues(alpha: 0.15)
+                                : cs.surfaceContainerLowest,
+                          ),
+                          child: Column(
+                            children: [
+                              if (_selectedFile == null) ...[
+                                Icon(Icons.cloud_upload_outlined,
+                                    size: 48, color: cs.onSurfaceVariant.withValues(alpha: 0.5)),
+                                const SizedBox(height: 12),
+                                Text(
+                                  '点击或拖放音频文件',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    color: cs.onSurfaceVariant,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  '支持 WAV / MP3 格式',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: cs.onSurfaceVariant.withValues(alpha: 0.6),
+                                  ),
+                                ),
+                              ] else ...[
+                                Icon(Icons.audio_file,
+                                    size: 40, color: cs.primary),
+                                const SizedBox(height: 12),
+                                Text(
+                                  _fileName,
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w600,
+                                    color: cs.onSurface,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _formatSize(_fileSize),
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: cs.onSurfaceVariant,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                TextButton.icon(
+                                  onPressed: _loading ? null : _pickFile,
+                                  icon: const Icon(Icons.swap_horiz, size: 16),
+                                  label: const Text('更换文件'),
+                                  style: TextButton.styleFrom(
+                                    visualDensity: VisualDensity.compact,
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+
+                      // Language selector
+                      DropdownButtonFormField<String>(
+                        value: _language,
+                        decoration: const InputDecoration(
+                          labelText: '识别语言',
+                          prefixIcon: Icon(Icons.translate, size: 20),
+                        ),
+                        borderRadius: BorderRadius.circular(10),
+                        items: const [
+                          DropdownMenuItem(value: 'auto', child: Text('自动检测')),
+                          DropdownMenuItem(value: 'zh', child: Text('中文')),
+                          DropdownMenuItem(value: 'en', child: Text('English')),
+                        ],
+                        onChanged: _loading
+                            ? null
+                            : (v) => setState(() => _language = v ?? 'auto'),
+                      ),
+                      const SizedBox(height: 24),
+
+                      // Transcribe button
+                      SizedBox(
+                        height: 48,
+                        child: FilledButton.icon(
+                          onPressed: (_selectedFile != null && !_loading && hasKey)
+                              ? _transcribe
+                              : null,
+                          icon: _loading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.auto_awesome, size: 20),
+                          label: Text(
+                            _loading ? '正在识别...' : '开始识别',
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+                          ),
+                        ),
+                      ),
+
+                      // Error
+                      if (_error != null) ...[
+                        const SizedBox(height: 20),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: cs.errorContainer,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(Icons.error_outline, color: cs.error, size: 20),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  _error!,
+                                  style: TextStyle(
+                                    color: cs.onErrorContainer,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+
+                      // Result
+                      if (_result.isNotEmpty) ...[
+                        const SizedBox(height: 20),
+                        Container(
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: cs.outlineVariant),
+                            color: cs.surfaceContainerLowest,
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                                child: Row(
+                                  children: [
+                                    Icon(Icons.text_snippet_outlined,
+                                        size: 18, color: cs.primary),
+                                    const SizedBox(width: 8),
+                                    Text(
+                                      '识别结果',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 14,
+                                        color: cs.onSurface,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    IconButton(
+                                      icon: const Icon(Icons.copy_rounded, size: 18),
+                                      onPressed: _copyResult,
+                                      tooltip: '复制',
+                                      style: IconButton.styleFrom(
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Divider(height: 1, color: cs.outlineVariant),
+                              Padding(
+                                padding: const EdgeInsets.all(16),
+                                child: SelectableText(
+                                  _result,
+                                  style: const TextStyle(
+                                    fontSize: 15,
+                                    height: 1.6,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+
+                      const SizedBox(height: 24),
+                    ],
+                  ),
                 ),
               ),
-          ],
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }

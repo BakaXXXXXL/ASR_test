@@ -1,83 +1,38 @@
-# Miscellaneous
-*.class
-*.log
-*.pyc
-*.swp
-.DS_Store
-.atom/
-.buildlog/
-.history
-.svn/
-migrate_working_dir/
-
-# IntelliJ related
-*.iml
-*.ipr
-*.iws
-.idea/
-
-# VS Code related
-.vscode/
-
-# Flutter/Dart/Pub related
-**/doc/api/
-**/ios/Flutter/.last_build_id
+# Flutter/Dart
 .dart_tool/
 .flutter-plugins
 .flutter-plugins-dependencies
 .packages
 .pub-cache/
 .pub/
-/build/
+**/doc/api/
 pubspec.lock
 
-# Symbolication related
-app.*.symbols
+# Build output
+**/build/
 
-# Obfuscation related
-app.*.map.json
-
-# Android Studio will place build artifacts here
-/android/app/debug
-/android/app/profile
-/android/app/release
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-.venv/
-*.egg-info/
-dist/
-build/
-*.egg
-
-# Environment
-.env
-.serverless/
+# Platform directories that don't need version control
+client/ios/
+client/linux/
+client/macos/
+client/web/
+client/test/
 
 # IDE
 .idea/
 .vscode/
-*.swp
-*.swo
+*.iml
+*.ipr
+*.iws
 
 # OS
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+
+# Environment
+.env
 
 # Logs
 *.log
-
-# Model files (large)
-models/
-*.bin
-*.safetensors
-
-# Temporary audio files
-*.tmp
-temp/
