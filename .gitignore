@@ -11,7 +11,7 @@ pubspec.lock
 # Build output
 **/build/
 
-# Platform directories that don't need version control
+# Platform directories not needed for this project
 client/ios/
 client/linux/
 client/macos/
@@ -33,6 +33,7 @@ Thumbs.db
 
 # Environment
 .env
+client/android/local.properties
 
 # Logs
 *.log
