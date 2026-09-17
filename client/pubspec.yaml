@@ -11,7 +11,7 @@ dependencies:
     sdk: flutter
   audio_decoder: ^0.8.1
   dio: ^5.7.0
-  file_picker: ^11.0.3
+  file_picker: ^10.3.10
   shared_preferences: ^2.3.4
   window_manager: ^0.4.3
   cupertino_icons: ^1.0.8
