@@ -7,8 +7,8 @@ plugins {
 android {
     namespace = "com.asr.client.asr_client"
     compileSdk = 36
-    // 固定为 CI runner 上已安装的 NDK，避免 Flutter 每次构建都去 sdkmanager 下载新版本。
-    ndkVersion = "27.0.12077973"
+    // 与 Flutter/各插件期望的 NDK 保持一致（Flutter 会按需自动安装）。
+    ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
