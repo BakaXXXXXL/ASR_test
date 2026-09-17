@@ -4,7 +4,7 @@
 
 ## 功能特性
 
-- 音频文件导入转文字（支持 wav / mp3）
+- 音频文件导入转文字（支持 wav / mp3 / m4a）
 - 多语言支持（中文/英文/自动检测）
 - Windows 桌面端 (.exe) + Android 移动端 (APK)
 - 简洁美观的 Material Design 3 界面，支持明暗主题
@@ -28,6 +28,7 @@
 ```bash
 cd client/
 
+# 环境要求：Flutter >= 3.38（Dart >= 3.10.8，audio_decoder 插件要求）
 # 生成平台文件（首次）
 flutter create . --platforms=windows,android
 
@@ -44,9 +45,9 @@ flutter build apk --release
 ### 4. 使用
 
 1. 打开应用，点击右上角齿轮图标配置 API Key
-2. 点击音频上传区域选择 wav 或 mp3 文件
+2. 点击音频上传区域选择 wav、mp3 或 m4a 文件
 3. 选择语言（推荐自动检测）
-4. 点击"开始识别"等待结果
+4. 点击"开始识别"等待结果（m4a 会先本地转成 16kHz 单声道 wav，约 4 分钟以内的音频可直接识别）
 5. 识别完成后点击复制按钮复制结果
 
 ## 项目结构
@@ -60,9 +61,13 @@ ASR_test/
 │   │   ├── main.dart        # 入口（含桌面窗口管理）
 │   │   ├── config.dart      # 配置管理
 │   │   ├── services/
-│   │   │   └── asr_service.dart  # MiMo API 调用
+│   │   │   ├── asr_service.dart     # MiMo API 调用 + 识别流程编排
+│   │   │   ├── audio_format.dart    # 格式嗅探 / MIME / 体积与时长上限（纯 Dart，可单测）
+│   │   │   └── audio_converter.dart # m4a → wav 本地转码（系统原生解码器）
 │   │   └── screens/
 │   │       └── home_screen.dart  # 主界面 UI
+│   ├── test/
+│   │   └── audio_format_test.dart # 格式与上限策略单元测试
 │   └── pubspec.yaml
 ├── docs/                    # 技术文档
 │   ├── architecture.md
@@ -86,6 +91,7 @@ ASR_test/
 | 跨平台客户端 | Flutter 3.x (Dart) |
 | HTTP 客户端 | Dio |
 | 文件选择 | file_picker |
+| 音频解码 | audio_decoder（系统原生解码器，无需 FFmpeg） |
 | 桌面窗口 | window_manager |
 | CI/CD | GitHub Actions |
 

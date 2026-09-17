@@ -60,11 +60,15 @@ API Key 在 https://platform.xiaomimimo.com/console 获取。
 
 ### 音频格式要求
 
-- 仅支持 **wav** 和 **mp3** 格式
-- 需转换为 Base64 编码，编码后大小上限 **10MB**
+- 服务端仅接受 **wav** 和 **mp3** 格式
+- 需转换为 Base64 编码，**Base64 字符串**大小上限 **10MB**（即原始字节 ≤ 7,864,320 B）
 - Data URL 格式：
   - wav: `data:audio/wav;base64,<BASE64>`
   - mp3: `data:audio/mpeg;base64,<BASE64>`
+- **m4a 不在服务端支持列表内**：客户端会先把 m4a 转成 16kHz 单声道 16-bit WAV（`data:audio/wav;base64,...`）再上传。按此规格估算，m4a 可直接识别的时长约 **4 分钟**（转码后 Base64 需 ≤ 10MB）
+- 客户端额外做了一层本地校验：
+  - 以文件头魔数判定真实格式（`RIFF....WAVE` → wav，`ID3` / MPEG 同步字 → mp3，偏移 4 起为 `ftyp` → m4a），无法识别直接报错
+  - 转码前先读时长，超过 240 秒直接报错，不发请求
 
 ### 响应格式（非流式）
 
