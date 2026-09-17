@@ -4,6 +4,17 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 
 import '../config.dart';
+import 'audio_converter.dart';
+import 'audio_format.dart';
+
+/// 识别流程阶段，供 UI 展示进度文案。
+enum AudioStage {
+  /// m4a 正在本地转码成 WAV。
+  converting,
+
+  /// 正在上传并等待识别结果。
+  uploading,
+}
 
 class TranscribeResult {
   final String text;
@@ -22,7 +33,7 @@ class TranscribeResult {
           text = content;
         } else if (content is List) {
           text = content
-              .where((c) => c['type' ] == 'text')
+              .where((c) => c['type'] == 'text')
               .map((c) => c['text'])
               .join();
         }
@@ -34,6 +45,7 @@ class TranscribeResult {
 
 class AsrService {
   final AppConfig config;
+  final AudioConverter _converter = AudioConverter();
   late final Dio _dio;
 
   AsrService(this.config) {
@@ -48,47 +60,63 @@ class AsrService {
     ));
   }
 
+  /// 把 [file] 转成文字。
+  ///
+  /// 格式以文件头为准：wav / mp3 直接上传，m4a 先本地转码成
+  /// 16 kHz 单声道 WAV 再上传。格式无法识别、体积或时长超限、
+  /// 解码失败都会抛出 [AudioInputException]（文案可直接展示），
+  /// 这些情况下不会发起网络请求。
   Future<TranscribeResult> transcribe(
     File file, {
     String language = 'auto',
+    void Function(AudioStage stage)? onStage,
   }) async {
-    final bytes = await file.readAsBytes();
-    if (bytes.length > 10 * 1024 * 1024) {
-      throw Exception('文件过大（Base64 编码后不能超过 10MB）');
+    var bytes = await file.readAsBytes();
+    final format = detectAudioFormat(bytes);
+    if (format == null) {
+      throw const AudioInputException(unsupportedFormatMessage);
     }
 
-    final suffix = file.path.split('.').last.toLowerCase();
-    String mimeType;
-    if (suffix == 'wav') {
-      mimeType = 'audio/wav';
-    } else if (suffix == 'mp3') {
-      mimeType = 'audio/mpeg';
-    } else {
-      throw Exception('仅支持 wav 和 mp3 格式');
+    File? converted;
+    if (needsConversion(format)) {
+      onStage?.call(AudioStage.converting);
+      converted = await _converter.toWav(file);
+      bytes = await converted.readAsBytes();
     }
 
-    final base64Audio = base64Encode(bytes);
-    final dataUrl = 'data:$mimeType;base64,$base64Audio';
+    try {
+      if (!fitsBase64Limit(bytes.length)) {
+        throw AudioInputException(sizeLimitMessage(bytes.length));
+      }
 
-    final body = {
-      'model': 'mimo-v2.5-asr',
-      'messages': [
-        {
-          'role': 'user',
-          'content': [
-            {
-              'type': 'input_audio',
-              'input_audio': {'data': dataUrl},
-            }
-          ],
-        }
-      ],
-      'extra_body': {
-        'asr_options': {'language': language}
-      },
-    };
+      final dataUrl =
+          'data:${mimeTypeOf(uploadFormatFor(format))};base64,${base64Encode(bytes)}';
 
-    final response = await _dio.post('/chat/completions', data: body);
-    return TranscribeResult.fromJson(response.data);
+      final body = {
+        'model': 'mimo-v2.5-asr',
+        'messages': [
+          {
+            'role': 'user',
+            'content': [
+              {
+                'type': 'input_audio',
+                'input_audio': {'data': dataUrl},
+              }
+            ],
+          }
+        ],
+        'extra_body': {
+          'asr_options': {'language': language}
+        },
+      };
+
+      onStage?.call(AudioStage.uploading);
+      final response = await _dio.post('/chat/completions', data: body);
+      return TranscribeResult.fromJson(response.data);
+    } finally {
+      if (converted != null) {
+        await _converter.cleanup(converted);
+      }
+    }
   }
 }

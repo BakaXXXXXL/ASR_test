@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../config.dart';
 import '../services/asr_service.dart';
+import '../services/audio_format.dart';
 
 class HomeScreen extends StatefulWidget {
   final AppConfig config;
@@ -25,6 +26,13 @@ class _HomeScreenState extends State<HomeScreen> {
   String _result = '';
   bool _loading = false;
   String? _error;
+  AudioFormat? _format;
+  AudioStage? _stage;
+
+  String get _stageLabel {
+    if (!_loading) return '开始识别';
+    return _stage == AudioStage.converting ? '正在转换音频...' : '正在识别...';
+  }
 
   late AsrService _asr;
 
@@ -37,17 +45,36 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _pickFile() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
-      allowedExtensions: ['wav', 'mp3'],
+      allowedExtensions: pickedExtensions,
     );
-    if (result != null && result.files.single.path != null) {
-      final file = File(result.files.single.path!);
-      setState(() {
-        _selectedFile = file;
-        _fileName = result.files.single.name;
-        _fileSize = result.files.single.size;
-        _error = null;
-        _result = '';
-      });
+    if (result == null || result.files.single.path == null) return;
+
+    final file = File(result.files.single.path!);
+    final format = await _detectFormat(file);
+    if (!mounted) return;
+
+    setState(() {
+      _selectedFile = file;
+      _fileName = result.files.single.name;
+      _fileSize = result.files.single.size;
+      _format = format;
+      _error = format == null ? unsupportedFormatMessage : null;
+      _result = '';
+      _stage = null;
+    });
+  }
+
+  /// 只读文件头识别真实格式（扩展名不可信）。
+  Future<AudioFormat?> _detectFormat(File file) async {
+    final raf = await file.open();
+    try {
+      final length = await raf.length();
+      final head = await raf.read(length < 12 ? length : 12);
+      return detectAudioFormat(head);
+    } catch (_) {
+      return null;
+    } finally {
+      await raf.close();
     }
   }
 
@@ -58,14 +85,22 @@ class _HomeScreenState extends State<HomeScreen> {
       _loading = true;
       _error = null;
       _result = '';
+      _stage = null;
     });
 
     try {
-      final res = await _asr.transcribe(_selectedFile!, language: _language);
+      final res = await _asr.transcribe(
+        _selectedFile!,
+        language: _language,
+        onStage: (stage) {
+          if (mounted) setState(() => _stage = stage);
+        },
+      );
       if (mounted) {
         setState(() {
           _result = res.text;
           _loading = false;
+          _stage = null;
         });
       }
     } on DioException catch (e) {
@@ -81,6 +116,7 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {
           _error = msg;
           _loading = false;
+          _stage = null;
         });
       }
     } catch (e) {
@@ -88,6 +124,7 @@ class _HomeScreenState extends State<HomeScreen> {
         setState(() {
           _error = e.toString();
           _loading = false;
+          _stage = null;
         });
       }
     }
@@ -306,7 +343,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 ),
                                 const SizedBox(height: 4),
                                 Text(
-                                  '支持 WAV / MP3 格式',
+                                  '支持 WAV / MP3 / M4A 格式',
                                   style: TextStyle(
                                     fontSize: 13,
                                     color: cs.onSurfaceVariant.withValues(alpha: 0.6),
@@ -333,6 +370,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                     color: cs.onSurfaceVariant,
                                   ),
                                 ),
+                                if (_format == AudioFormat.m4a) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    '将自动转换为 WAV（${wavSampleRate ~/ 1000}kHz 单声道）后上传，'
+                                    '约 ${maxConvertibleSeconds ~/ 60} 分钟以内',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: cs.onSurfaceVariant
+                                          .withValues(alpha: 0.75),
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ],
                                 const SizedBox(height: 8),
                                 TextButton.icon(
                                   onPressed: _loading ? null : _pickFile,
@@ -351,7 +401,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                       // Language selector
                       DropdownButtonFormField<String>(
-                        value: _language,
+                        initialValue: _language,
                         decoration: const InputDecoration(
                           labelText: '识别语言',
                           prefixIcon: Icon(Icons.translate, size: 20),
@@ -372,7 +422,10 @@ class _HomeScreenState extends State<HomeScreen> {
                       SizedBox(
                         height: 48,
                         child: FilledButton.icon(
-                          onPressed: (_selectedFile != null && !_loading && hasKey)
+                          onPressed: (_selectedFile != null &&
+                                  !_loading &&
+                                  hasKey &&
+                                  _format != null)
                               ? _transcribe
                               : null,
                           icon: _loading
@@ -386,7 +439,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 )
                               : const Icon(Icons.auto_awesome, size: 20),
                           label: Text(
-                            _loading ? '正在识别...' : '开始识别',
+                            _stageLabel,
                             style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
                           ),
                         ),

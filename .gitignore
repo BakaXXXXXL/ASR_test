@@ -16,7 +16,6 @@ client/ios/
 client/linux/
 client/macos/
 client/web/
-client/test/
 
 # IDE
 .idea/
