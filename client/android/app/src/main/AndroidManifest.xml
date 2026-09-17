@@ -1,4 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- release 包需要联网访问 MiMo API（debug/profile manifest 里的声明不会进入 release 包）。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:label="asr_client"
         android:name="${applicationName}"
