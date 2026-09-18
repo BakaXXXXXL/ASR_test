@@ -76,21 +76,30 @@ ffmpeg -i input.flac output.mp3
 ffmpeg -i input.ogg output.mp3
 ```
 
-### m4a 提示"超过上限…约 4 分钟以内"
-MiMo API 只接受 wav / mp3，m4a 需要先在本地转成 16kHz 单声道 WAV 再上传，而 Base64 后上限为 10MB，等效约 4 分钟。裁剪后再试：
+### 长录音如何转写
+超过单次上传上限（Base64 后 10MB）的录音会自动走分段路径：先统一转成 16kHz 单声道 WAV，按 60 秒切段、4 并发并行识别，再按序合并结果，最长支持 **2 小时**。界面会显示"正在转写 x/N 段…"。分段切点可能落在句子中间，个别断句不自然属已知限制。
+
+### 提示"第 x/N 段识别失败"
+分段转写中某段重试（429/5xx/超时，退避 1s/2s/4s）后仍失败，其余段会被取消以避免静默丢内容。多为网络波动或触发 API 限流，稍后重试即可；频繁出现可降低并发（`audio_segment_transcriber.dart` 的 `segmentConcurrency`）。
+
+### 提示"音频时长约…超过上限 2 小时"
+超过 2 小时的录音需要先裁剪，例如：
 ```bash
-ffmpeg -i input.m4a -ss 0 -t 240 -ar 16000 -ac 1 output.wav
+ffmpeg -i input.m4a -ss 0 -t 7200 output.wav
 ```
 
-### 提示"M4A 解码失败"
-m4a 解码依赖系统原生解码器：
+### 提示"音频解码失败"
+解码依赖系统原生解码器（转码 m4a 或长录音归一化时都会用到）：
 - **Android**：MediaCodec（Android 7.0+ 自带）
 - **Windows**：Media Foundation 的 AAC 解码器（Windows 10/11 自带，N 版或精简系统可能缺失）
 
-遇到该提示时，先用 ffmpeg 转成 wav / mp3 再上传。
+遇到该提示时，先用 ffmpeg 转成标准 wav / mp3 再上传。
 
 ### 提示"音频数据过大"
-上限针对 **Base64 字符串**（10MB），约为原始文件的 1.33 倍，即原始文件需不大于 **7.5MB**。建议裁剪或压缩音频时长。
+新版中超限长录音会自动分段，该提示基本只在文件读取竞计时出现。若遇到，重新选择文件再试。
+
+### 导出 TXT
+识别结果卡片右上角下载按钮 → 弹出"另存为"对话框选择位置，UTF-8 编码写入 `.txt`。取消对话框不会有任何副作用。
 
 ### Android 网络请求失败
 确认 `android/app/src/main/AndroidManifest.xml` 声明了（release 包必须，debug/profile 里的声明不会进入 release 包）：

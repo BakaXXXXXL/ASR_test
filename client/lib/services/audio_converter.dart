@@ -11,9 +11,10 @@ import 'audio_format.dart';
 class AudioConverter {
   /// 转码 [src] 并返回临时 WAV 文件，调用方用完必须调用 [cleanup]。
   ///
-  /// 时长超过 [maxConvertibleDuration] 时直接报错，不会真的解码，
-  /// 避免把长音频展开成上百 MB 的 PCM。
-  Future<File> toWav(File src) async {
+  /// 时长超过 [maxDuration] 时直接报错，不会真的解码，
+  /// 避免把超长音频展开成上百 MB 的 PCM。
+  Future<File> toWav(File src,
+      {Duration maxDuration = maxConvertibleDuration}) async {
     final Duration duration;
     try {
       duration = (await AudioDecoder.getAudioInfo(src.path)).duration;
@@ -21,8 +22,9 @@ class AudioConverter {
       throw AudioInputException(decodeFailureMessage(e));
     }
 
-    if (duration > maxConvertibleDuration) {
-      throw AudioInputException(durationLimitMessage(duration));
+    if (duration > maxDuration) {
+      throw AudioInputException(
+          durationLimitMessage(duration, limit: maxDuration));
     }
 
     final dir = await Directory.systemTemp.createTemp('asr_m4a_');

@@ -30,8 +30,17 @@ const int maxRawBytes = maxBase64Chars ~/ 4 * 3;
 /// 按 [maxRawBytes] 计算理论上限约 245 秒，这里取 240 秒留出余量。
 const int maxConvertibleSeconds = 240;
 
-/// 转码后可上传的最长时长。
+/// 转码后可单次上传的最长时长。
 const Duration maxConvertibleDuration = Duration(seconds: maxConvertibleSeconds);
+
+/// 分段转写：每段目标时长（秒）。
+const int segmentSeconds = 60;
+
+/// 分段转写：最大段数（约等于 [maxSegmentedDuration] / [segmentSeconds] 再多留一点余量）。
+const int maxSegmentCount = 125;
+
+/// 分段转写支持的录音总时长上限：2 小时。
+const Duration maxSegmentedDuration = Duration(hours: 2);
 
 /// 无法识别文件头时的统一提示。
 const String unsupportedFormatMessage = '无法识别的音频格式，仅支持 WAV / MP3 / M4A';
@@ -98,6 +107,79 @@ int wavBytesFor(Duration duration) {
   return _wavHeaderBytes + samples * wavChannels * (wavBitDepth ~/ 8);
 }
 
+/// 一段分段计划：PCM 数据区内的字节区间 [start, end)。
+typedef AudioSegment = ({int start, int end});
+
+/// 把 PCM 字节数切成 [segmentSeconds] 秒的段，尾段可短。
+///
+/// 段数超过 [maxSegmentCount]（≈2 小时）时抛 [AudioInputException]。
+List<AudioSegment> buildSegmentPlan(int pcmBytes) {
+  final segmentBytes = segmentSeconds * wavBytesPerSecond;
+  final plan = <AudioSegment>[];
+  var offset = 0;
+  while (offset < pcmBytes) {
+    final end = offset + segmentBytes < pcmBytes ? offset + segmentBytes : pcmBytes;
+    plan.add((start: offset, end: end));
+    offset = end;
+  }
+  if (plan.length > maxSegmentCount) {
+    throw AudioInputException(durationLimitMessage(
+      Duration(seconds: pcmBytes ~/ wavBytesPerSecond),
+      limit: maxSegmentedDuration,
+    ));
+  }
+  return plan;
+}
+
+/// 构造 44 字节的 RIFF/WAVE 文件头（16kHz 单声道 16-bit）。
+Uint8List buildWavHeader(int pcmLength) {
+  final header = Uint8List(_wavHeaderBytes);
+  final view = ByteData.sublistView(header);
+  header.setRange(0, 4, 'RIFF'.codeUnits);
+  view.setUint32(4, _wavHeaderBytes - 8 + pcmLength, Endian.little);
+  header.setRange(8, 12, 'WAVE'.codeUnits);
+  header.setRange(12, 16, 'fmt '.codeUnits);
+  view.setUint32(16, 16, Endian.little);
+  view.setUint16(20, 1, Endian.little); // PCM
+  view.setUint16(22, wavChannels, Endian.little);
+  view.setUint32(24, wavSampleRate, Endian.little);
+  view.setUint32(28, wavBytesPerSecond, Endian.little);
+  view.setUint16(32, wavChannels * (wavBitDepth ~/ 8), Endian.little);
+  view.setUint16(34, wavBitDepth, Endian.little);
+  header.setRange(36, 40, 'data'.codeUnits);
+  view.setUint32(40, pcmLength, Endian.little);
+  return header;
+}
+
+/// 解析 WAV 文件头，定位 PCM 数据区。
+///
+/// 文件头不一定是标准 44 字节（解码器可能写入 LIST/fact 等扩展块），
+/// 因此逐 chunk 扫描找 `data`。入参为文件开头的一段字节（几 KB 足够）。
+({int offset, int size}) findWavData(Uint8List headerBytes) {
+  if (headerBytes.length < 12 ||
+      !_asciiAt(headerBytes, 0, 'RIFF') ||
+      !_asciiAt(headerBytes, 8, 'WAVE')) {
+    throw const AudioInputException('WAV 文件头解析失败');
+  }
+  final view = ByteData.sublistView(headerBytes);
+  var pos = 12;
+  while (pos + 8 <= headerBytes.length) {
+    final size = view.getUint32(pos + 4, Endian.little);
+    if (_asciiAt(headerBytes, pos, 'data')) {
+      return (offset: pos + 8, size: size);
+    }
+    // chunk 按偶数字节对齐（奇数长度会填充 1 字节）
+    pos += 8 + size + (size & 1);
+  }
+  throw const AudioInputException('WAV 文件中未找到 data 块');
+}
+
+/// 按段序合并识别文本：去掉空白段，段间换行分隔。
+String mergeSegmentTexts(List<String> texts) => texts
+    .map((t) => t.trim())
+    .where((t) => t.isNotEmpty)
+    .join('\n');
+
 /// 体积超限的提示文案。
 String sizeLimitMessage(int rawBytes) {
   final mb = base64LengthFor(rawBytes) / (1024 * 1024);
@@ -105,16 +187,26 @@ String sizeLimitMessage(int rawBytes) {
 }
 
 /// 时长超限的提示文案。
-String durationLimitMessage(Duration duration) {
-  final minutes = duration.inSeconds / 60;
-  return '音频时长约 ${minutes.toStringAsFixed(1)} 分钟，超过上限'
-      '（M4A 转 ${wavSampleRate ~/ 1000}kHz 单声道 WAV 后约 '
-      '${maxConvertibleSeconds ~/ 60} 分钟以内），请裁剪后重试';
+String durationLimitMessage(Duration duration,
+    {Duration limit = maxConvertibleDuration}) {
+  return '音频时长约 ${_durationText(duration)}，超过上限 ${_durationText(limit)}，请裁剪后重试';
+}
+
+/// 某一段重试后仍失败的提示文案（[index] 从 1 开始）。
+String segmentFailureMessage(int index, int total, Object error) =>
+    '第 $index/$total 段识别失败：$error';
+
+String _durationText(Duration d) {
+  if (d.inSeconds % 3600 == 0 && d.inHours > 0) return '${d.inHours} 小时';
+  if (d.inSeconds % 60 == 0 && d.inMinutes > 0 && d.inMinutes < 60) {
+    return '${d.inMinutes} 分钟';
+  }
+  return '${(d.inSeconds / 60).toStringAsFixed(1)} 分钟';
 }
 
 /// 解码失败的提示文案。
 String decodeFailureMessage(Object error) =>
-    'M4A 解码失败：$error。可先转换为 WAV / MP3 后重试';
+    '音频解码失败：$error。可先转换为标准 WAV / MP3 后重试';
 
 bool _asciiAt(Uint8List bytes, int offset, String tag) {
   if (bytes.length < offset + tag.length) return false;

@@ -1,7 +1,7 @@
 name: asr_client
 description: ASR Speech-to-Text Client powered by MiMo-V2.5-ASR
 publish_to: 'none'
-version: 1.1.0+2
+version: 1.2.0+3
 
 environment:
   sdk: ^3.10.0

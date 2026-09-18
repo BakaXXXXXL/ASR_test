@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -28,10 +29,18 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _error;
   AudioFormat? _format;
   AudioStage? _stage;
+  int _segDone = 0;
+  int _segTotal = 0;
 
   String get _stageLabel {
     if (!_loading) return '开始识别';
-    return _stage == AudioStage.converting ? '正在转换音频...' : '正在识别...';
+    return switch (_stage) {
+      AudioStage.converting => '正在转换音频...',
+      AudioStage.segmentTranscribing => _segTotal > 0
+          ? '正在转写 $_segDone/$_segTotal 段...'
+          : '正在分段转写...',
+      _ => '正在识别...',
+    };
   }
 
   late AsrService _asr;
@@ -40,6 +49,12 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     _asr = AsrService(widget.config);
+  }
+
+  @override
+  void dispose() {
+    _asr.dispose();
+    super.dispose();
   }
 
   Future<void> _pickFile() async {
@@ -86,6 +101,8 @@ class _HomeScreenState extends State<HomeScreen> {
       _error = null;
       _result = '';
       _stage = null;
+      _segDone = 0;
+      _segTotal = 0;
     });
 
     try {
@@ -94,6 +111,14 @@ class _HomeScreenState extends State<HomeScreen> {
         language: _language,
         onStage: (stage) {
           if (mounted) setState(() => _stage = stage);
+        },
+        onProgress: (done, total) {
+          if (mounted && (done != _segDone || total != _segTotal)) {
+            setState(() {
+              _segDone = done;
+              _segTotal = total;
+            });
+          }
         },
       );
       if (mounted) {
@@ -143,6 +168,35 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _exportTxt() async {
+    if (_result.isEmpty) return;
+    final savedPath = await FilePicker.platform.saveFile(
+      dialogTitle: '导出识别结果为 TXT',
+      fileName: _exportFileName(),
+      bytes: utf8.encode(_result),
+    );
+    if (!mounted) return;
+    if (savedPath != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已导出到 $savedPath'),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+    }
+  }
+
+  String _exportFileName() {
+    final dot = _fileName.lastIndexOf('.');
+    final base = dot > 0 ? _fileName.substring(0, dot) : 'transcript';
+    final now = DateTime.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    final ts = '${now.year}${two(now.month)}${two(now.day)}'
+        '_${two(now.hour)}${two(now.minute)}${two(now.second)}';
+    return '${base}_$ts.txt';
+  }
+
   void _showSettings() {
     final keyCtrl = TextEditingController(text: widget.config.apiKey);
     bool obscure = true;
@@ -190,6 +244,7 @@ class _HomeScreenState extends State<HomeScreen> {
             FilledButton(
               onPressed: () async {
                 await widget.config.save(apiKey: keyCtrl.text.trim());
+                _asr.dispose();
                 _asr = AsrService(widget.config);
                 if (ctx.mounted) Navigator.pop(ctx);
                 setState(() {});
@@ -373,8 +428,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                 if (_format == AudioFormat.m4a) ...[
                                   const SizedBox(height: 6),
                                   Text(
-                                    '将自动转换为 WAV（${wavSampleRate ~/ 1000}kHz 单声道）后上传，'
-                                    '约 ${maxConvertibleSeconds ~/ 60} 分钟以内',
+                                    '将自动转换为 WAV（${wavSampleRate ~/ 1000}kHz 单声道），'
+                                    '超长录音按 ${segmentSeconds} 秒分段并行转写，最长 2 小时',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: cs.onSurfaceVariant
@@ -504,6 +559,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                       icon: const Icon(Icons.copy_rounded, size: 18),
                                       onPressed: _copyResult,
                                       tooltip: '复制',
+                                      style: IconButton.styleFrom(
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.download, size: 18),
+                                      onPressed: _exportTxt,
+                                      tooltip: '导出为 TXT',
                                       style: IconButton.styleFrom(
                                         visualDensity: VisualDensity.compact,
                                       ),

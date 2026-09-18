@@ -5,11 +5,12 @@
 ## 功能特性
 
 - 音频文件导入转文字（支持 wav / mp3 / m4a）
+- 长录音分段转写：超长录音自动转成 16kHz 单声道 WAV，按 60 秒分段并行识别（最长 2 小时）
 - 多语言支持（中文/英文/自动检测）
 - Windows 桌面端 (.exe) + Android 移动端 (APK)
 - 简洁美观的 Material Design 3 界面，支持明暗主题
 - API Key 认证保护
-- 识别结果一键复制
+- 识别结果一键复制或导出为 .txt 文件
 
 ## 快速开始
 
@@ -47,8 +48,8 @@ flutter build apk --release
 1. 打开应用，点击右上角齿轮图标配置 API Key
 2. 点击音频上传区域选择 wav、mp3 或 m4a 文件
 3. 选择语言（推荐自动检测）
-4. 点击"开始识别"等待结果（m4a 会先本地转成 16kHz 单声道 wav，约 4 分钟以内的音频可直接识别）
-5. 识别完成后点击复制按钮复制结果
+4. 点击"开始识别"等待结果（超过单次上传上限的长录音会自动分段并行转写，界面显示"正在转写 x/N 段"进度，最长 2 小时）
+5. 识别完成后可一键复制或点击下载按钮导出为 .txt
 
 ## 项目结构
 
@@ -62,8 +63,9 @@ ASR_test/
 │   │   ├── config.dart      # 配置管理
 │   │   ├── services/
 │   │   │   ├── asr_service.dart     # MiMo API 调用 + 识别流程编排
-│   │   │   ├── audio_format.dart    # 格式嗅探 / MIME / 体积与时长上限（纯 Dart，可单测）
-│   │   │   └── audio_converter.dart # m4a → wav 本地转码（系统原生解码器）
+│   │   │   ├── audio_format.dart    # 格式嗅探 / MIME / 上限与分段策略（纯 Dart，可单测）
+│   │   │   ├── audio_converter.dart # → 16kHz 单声道 WAV 本地转码（系统原生解码器）
+│   │   │   └── audio_segment_transcriber.dart # 长录音 60s 分段并行转写 + 合并
 │   │   └── screens/
 │   │       └── home_screen.dart  # 主界面 UI
 │   ├── test/
