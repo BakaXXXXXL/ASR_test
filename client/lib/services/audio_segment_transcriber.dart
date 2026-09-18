@@ -32,7 +32,8 @@ Future<String> transcribeSegmented(
   final data = findWavData(head);
   // 流式写入的 WAV declared size 可能为 0，此时以文件长度为准
   final declared = data.size == 0 ? fileLength - data.offset : data.size;
-  final pcmBytes = [declared, fileLength - data.offset].reduce(min);
+  final available = fileLength - data.offset;
+  final pcmBytes = declared < available ? declared : available;
   if (pcmBytes <= 0) {
     throw const AudioInputException('WAV 文件中没有可识别的音频数据');
   }
