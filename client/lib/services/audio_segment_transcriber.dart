@@ -81,7 +81,7 @@ Future<String> transcribeSegmented(
 
       if (lastError != null) {
         fatal =
-            AudioInputException(segmentFailureMessage(i + 1, total, lastError!));
+            AudioInputException(segmentFailureMessage(i + 1, total, lastError));
         cancelToken.cancel();
         return;
       }

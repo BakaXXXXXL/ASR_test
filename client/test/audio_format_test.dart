@@ -284,7 +284,7 @@ void main() {
 /// 构造带指定 chunk 序列的 WAV 头：fmt(16) + 各给定块，data 块内容省略。
 Uint8List _wavWithChunks(List<(String tag, int size)> chunks) {
   var length = 12 + 24; // RIFF 头 + fmt chunk
-  for (final (tag, size) in chunks) {
+  for (final (_, size) in chunks) {
     length += 8 + size + (size & 1);
   }
   final bytes = Uint8List(length);

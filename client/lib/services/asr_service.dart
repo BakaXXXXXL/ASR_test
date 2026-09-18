@@ -102,7 +102,7 @@ class AsrService {
       final convertedSize = await converted.length();
       if (fitsBase64Limit(convertedSize)) {
         final bytes = await converted.readAsBytes();
-        return _post(bytes, AudioFormat.wav, language, onStage: onStage);
+        return await _post(bytes, AudioFormat.wav, language, onStage: onStage);
       }
 
       onStage?.call(AudioStage.segmentTranscribing);

@@ -429,7 +429,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   const SizedBox(height: 6),
                                   Text(
                                     '将自动转换为 WAV（${wavSampleRate ~/ 1000}kHz 单声道），'
-                                    '超长录音按 ${segmentSeconds} 秒分段并行转写，最长 2 小时',
+                                    '超长录音按 $segmentSeconds 秒分段并行转写，最长 2 小时',
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: cs.onSurfaceVariant
