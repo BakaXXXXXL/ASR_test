@@ -34,5 +34,8 @@ Thumbs.db
 .env
 client/android/local.properties
 
+# Local agent config
+.pi/
+
 # Logs
 *.log
