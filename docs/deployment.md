@@ -17,7 +17,7 @@
 | Android Studio | 用于 Android 构建 |
 | Visual Studio | 用于 Windows 构建（含 C++ 桌面开发） |
 
-Android 工程已配置：`minSdk 24`、`compileSdk 36`、Java 17、AGP 9.1.0、Kotlin 2.4.0、Gradle 9.3.1、NDK 27.0.12077973。
+Android 工程已配置：`minSdk 24`、`compileSdk 36`、Java 17、AGP 9.1.0、Kotlin 2.4.0、Gradle 9.3.1；NDK 跟随 Flutter（`flutter.ndkVersion`，首次构建会自动安装）。
 
 ### 2.2 创建 Flutter 项目（首次）
 
