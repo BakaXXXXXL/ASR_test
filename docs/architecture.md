@@ -80,13 +80,17 @@
 
 | 模块 | 职责 |
 |------|------|
-| `main.dart` | Flutter 应用入口、主题配置、初始化 |
+| `main.dart` | Flutter 应用入口、平台自适应分流（Windows 走 WinUI 3，Android 走 Material 3） |
+| `app_fluent.dart` | Windows 专属 WinUI 3 风格顶层 App（基于 `fluent_ui`） |
+| `app_material.dart` | Android 专属 Material 3 风格顶层 App（基于 `material.dart`） |
+| `fluent_home_screen.dart` | Windows 端 WinUI 3 原生体验主界面（导航栏、亚克力卡片、InfoBar、ProgressRing） |
+| `material_home_screen.dart` | Android 移动端 Material 3 主界面 |
 | `config.dart` | 配置管理（API Key）、shared_preferences 持久化 |
 | `audio_format.dart` | 纯 Dart 策略层：文件头嗅探格式、MIME 映射、Base64 体积上限、分段计划/WAV 头构造与解析、文本合并、错误文案 |
 | `audio_converter.dart` | 音频 → 16kHz 单声道 WAV 本地转码、时长预检、临时文件清理 |
 | `audio_segment_transcriber.dart` | 长录音分段：按 60s 切片、4 并发请求、退避重试、失败取消、按序合并 |
 | `asr_service.dart` | 编排识别流程（嗅探 → 转码 → 单请求或分段 → POST）、响应解析、阶段/进度回调、Dio 释放 |
-| `home_screen.dart` | 主界面 UI、文件选择与格式预检、阶段与 x/N 分段进度提示、结果展示 / 复制 / 导出 TXT |
+| `home_screen.dart` | 跨平台自适应入口转发器 |
 
 ## 安全设计
 

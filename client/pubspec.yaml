@@ -15,6 +15,7 @@ dependencies:
   shared_preferences: ^2.3.4
   window_manager: ^0.4.3
   cupertino_icons: ^1.0.8
+  fluent_ui: ^4.13.0
 
 dev_dependencies:
   flutter_test:

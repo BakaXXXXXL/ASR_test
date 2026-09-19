@@ -8,7 +8,7 @@
 - 长录音分段转写：超长录音自动转成 16kHz 单声道 WAV，按 60 秒分段并行识别（最长 2 小时）
 - 多语言支持（中文/英文/自动检测）
 - Windows 桌面端 (.exe) + Android 移动端 (APK)
-- 简洁美观的 Material Design 3 界面，支持明暗主题
+- Windows 端采用微软 WinUI 3 (Fluent Design) 原生质感界面，Android 端采用 Material Design 3 界面，均支持系统级明暗主题
 - API Key 认证保护
 - 识别结果一键复制或导出为 .txt 文件
 
@@ -91,6 +91,7 @@ ASR_test/
 | ASR 服务 | MiMo-V2.5-ASR 官方 API |
 | API 格式 | OpenAI 兼容 (chat/completions) |
 | 跨平台客户端 | Flutter 3.x (Dart) |
+| Windows WinUI 3 | fluent_ui (Fluent Design System) |
 | HTTP 客户端 | Dio |
 | 文件选择 | file_picker |
 | 音频解码 | audio_decoder（系统原生解码器，无需 FFmpeg） |
