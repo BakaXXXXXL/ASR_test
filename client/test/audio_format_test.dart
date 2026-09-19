@@ -279,6 +279,106 @@ void main() {
       expect(message, contains('timeout'));
     });
   });
+
+  group('VAD 智能静音断句切片', () {
+    test('小缓冲区安全回退并对齐', () {
+      final small = Uint8List(100);
+      final cut = findOptimalSplitOffset(small, targetOffset: 51);
+      expect(cut % 2, 0);
+      expect(cut, 50);
+    });
+
+    test('优先命中静音区间中心', () {
+      // 15 秒搜索窗口（480,000 字节）
+      const windowBytesCount = 15 * wavBytesPerSecond;
+      final buffer = Uint8List(windowBytesCount);
+      final view = ByteData.sublistView(buffer);
+
+      // 默认填充大音量正弦/方波样本（幅值 4000）
+      for (var i = 0; i < windowBytesCount; i += 2) {
+        view.setInt16(i, (i % 8 < 4) ? 4000 : -4000, Endian.little);
+      }
+
+      // 在 [200,000, 220,000]（长约 625ms）人工挖出一个静音空洞（振幅 0）
+      for (var i = 200000; i < 220000; i += 2) {
+        view.setInt16(i, 0, Endian.little);
+      }
+
+      final cut = findOptimalSplitOffset(buffer, targetOffset: 320000);
+      expect(cut % 2, 0);
+      // 切分点必须精准落在静音区间 [200000, 220000] 内部
+      expect(cut, greaterThanOrEqualTo(200000));
+      expect(cut, lessThanOrEqualTo(220000));
+    });
+
+    test('多静音区间优先选择最靠近目标偏移行者', () {
+      const windowBytesCount = 15 * wavBytesPerSecond;
+      final buffer = Uint8List(windowBytesCount);
+      final view = ByteData.sublistView(buffer);
+
+      for (var i = 0; i < windowBytesCount; i += 2) {
+        view.setInt16(i, 5000, Endian.little);
+      }
+
+      // 静音区间 1：远离目标 (60,000 ~ 70,000)
+      for (var i = 60000; i < 70000; i += 2) {
+        view.setInt16(i, 0, Endian.little);
+      }
+
+      // 静音区间 2：紧邻目标 320,000 (310,000 ~ 325,000)
+      for (var i = 310000; i < 325000; i += 2) {
+        view.setInt16(i, 0, Endian.little);
+      }
+
+      final cut = findOptimalSplitOffset(buffer, targetOffset: 320000);
+      // 必须优先选取更靠近 320,000 的静音区间 2
+      expect(cut, greaterThanOrEqualTo(310000));
+      expect(cut, lessThanOrEqualTo(325000));
+    });
+
+    test('全段无明显静音时选取局部能量波谷', () {
+      const windowBytesCount = 15 * wavBytesPerSecond;
+      final buffer = Uint8List(windowBytesCount);
+      final view = ByteData.sublistView(buffer);
+
+      // 整体较高能量（幅值 3000）
+      for (var i = 0; i < windowBytesCount; i += 2) {
+        view.setInt16(i, 3000, Endian.little);
+      }
+
+      // 在 250,000 处存在一段局部较低能量（幅值 600，虽未达到静音阈值但为明显局部凹陷）
+      for (var i = 245000; i < 255000; i += 2) {
+        view.setInt16(i, 600, Endian.little);
+      }
+
+      final cut = findOptimalSplitOffset(buffer, targetOffset: 250000);
+      expect(cut, closeTo(250000, 3200)); // 误差在 100ms 内
+    });
+
+    test('buildVadSegmentPlanFromBytes 规划连续无缝片段', () {
+      // 构造 130 秒长度的音频（130 * 32000 字节）
+      const totalSeconds = 130;
+      final bytes = Uint8List(totalSeconds * wavBytesPerSecond);
+      final plan = buildVadSegmentPlanFromBytes(bytes);
+
+      expect(plan.length, greaterThanOrEqualTo(2));
+      expect(plan.first.start, 0);
+      expect(plan.last.end, bytes.length);
+
+      for (var i = 1; i < plan.length; i++) {
+        expect(plan[i].start, plan[i - 1].end);
+        expect(plan[i].start % 2, 0);
+        expect(plan[i].end % 2, 0);
+      }
+    });
+
+    test('小于最大单段时无需切片', () {
+      final shortBytes = Uint8List(30 * wavBytesPerSecond);
+      final plan = buildVadSegmentPlanFromBytes(shortBytes);
+      expect(plan.length, 1);
+      expect(plan[0], (start: 0, end: shortBytes.length));
+    });
+  });
 }
 
 /// 构造带指定 chunk 序列的 WAV 头：fmt(16) + 各给定块，data 块内容省略。

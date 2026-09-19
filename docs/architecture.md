@@ -46,8 +46,8 @@
        ↓
   ┌─ 转码后 ≤ 10MB Base64 上限：单请求路径
   │    构造 data:audio/wav;base64,... → POST /chat/completions → 解析结果
-  └─ 超长录音：分段路径（audio_segment_transcriber）
-       解析 WAV data 块 → 按 60 秒切段（≤125 段，即约 2 小时）
+  └─ 超长录音：VAD 分段路径（audio_segment_transcriber）
+       解析 WAV data 块 → 边界区扫描短时能量与滑动平滑，在 50s~65s 寻找静音/停顿谷底切片
        → 每段重拼 44 字节 WAV 头 → 4 并发上传识别
        → 429/5xx/超时按 1s/2s/4s 退避重试（每段最多 4 次尝试）
        → 任一段最终失败：取消其余段并报"第 x/N 段识别失败"
@@ -88,7 +88,7 @@
 | `config.dart` | 配置管理（API Key）、shared_preferences 持久化 |
 | `audio_format.dart` | 纯 Dart 策略层：文件头嗅探格式、MIME 映射、Base64 体积上限、分段计划/WAV 头构造与解析、文本合并、错误文案 |
 | `audio_converter.dart` | 音频 → 16kHz 单声道 WAV 本地转码、时长预检、临时文件清理 |
-| `audio_segment_transcriber.dart` | 长录音分段：按 60s 切片、4 并发请求、退避重试、失败取消、按序合并 |
+| `audio_segment_transcriber.dart` | 长录音分段：基于 VAD 在 50s~65s 停顿切片、4 并发请求、退避重试、失败取消、按序合并 |
 | `asr_service.dart` | 编排识别流程（嗅探 → 转码 → 单请求或分段 → POST）、响应解析、阶段/进度回调、Dio 释放 |
 | `home_screen.dart` | 跨平台自适应入口转发器 |
 

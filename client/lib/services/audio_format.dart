@@ -33,11 +33,32 @@ const int maxConvertibleSeconds = 240;
 /// 转码后可单次上传的最长时长。
 const Duration maxConvertibleDuration = Duration(seconds: maxConvertibleSeconds);
 
-/// 分段转写：每段目标时长（秒）。
+/// 分段转写：标准目标时长（秒）。
 const int segmentSeconds = 60;
 
+/// VAD 弹性切片搜索窗口（秒）：在 [50s, 65s] 之间寻找自然停顿
+const int vadMinSegmentSeconds = 50;
+const int vadNominalSegmentSeconds = 60;
+const int vadMaxSegmentSeconds = 65;
+
+/// VAD 对应的字节数
+const int vadMinSegmentBytes = vadMinSegmentSeconds * wavBytesPerSecond;
+const int vadNominalSegmentBytes = vadNominalSegmentSeconds * wavBytesPerSecond;
+const int vadMaxSegmentBytes = vadMaxSegmentSeconds * wavBytesPerSecond;
+
+/// VAD 采样帧长：20ms（16kHz 下为 320 个采样点，即 640 字节）
+const int vadFrameSamples = 320;
+const int vadFrameBytes = vadFrameSamples * 2;
+
+/// VAD 帧步长：10ms（160 个采样点，320 字节）
+const int vadFrameStepSamples = 160;
+const int vadFrameStepBytes = vadFrameStepSamples * 2;
+
+/// VAD 判定为静音的平均绝对振幅（MAV）阈值（16-bit PCM 范围 -32768 ~ 32767）
+const int vadSilenceThreshold = 350;
+
 /// 分段转写：最大段数（约等于 [maxSegmentedDuration] / [segmentSeconds] 再多留一点余量）。
-const int maxSegmentCount = 125;
+const int maxSegmentCount = 145;
 
 /// 分段转写支持的录音总时长上限：2 小时。
 const Duration maxSegmentedDuration = Duration(hours: 2);
@@ -125,6 +146,176 @@ List<AudioSegment> buildSegmentPlan(int pcmBytes) {
   if (plan.length > maxSegmentCount) {
     throw AudioInputException(durationLimitMessage(
       Duration(seconds: pcmBytes ~/ wavBytesPerSecond),
+      limit: maxSegmentedDuration,
+    ));
+  }
+  return plan;
+}
+
+/// 在 [windowBytes]（16kHz 16-bit 单声道 PCM）中分析短时能量，返回最佳切断点的字节偏移。
+///
+/// [targetOffset] 为名义目标偏移（通常是对应 60s 处的字节偏移）。
+/// 优先检索持续时间 ≥100ms 且 MAV ≤ [vadSilenceThreshold] 的静音区间中心；
+/// 若没有明显静音，则选择局部能量平滑谷底，确保切片落在自然呼吸停顿处。
+int findOptimalSplitOffset(Uint8List windowBytes, {int? targetOffset}) {
+  if (windowBytes.length < vadFrameBytes) {
+    final t = targetOffset ?? (windowBytes.length ~/ 2);
+    return (t.clamp(0, windowBytes.length)) & ~1;
+  }
+
+  final target = (targetOffset ?? (windowBytes.length ~/ 2)).clamp(0, windowBytes.length);
+  final view = ByteData.sublistView(windowBytes);
+  final numFrames = (windowBytes.length - vadFrameBytes) ~/ vadFrameStepBytes + 1;
+  if (numFrames <= 0) {
+    return target & ~1;
+  }
+
+  // 1. 计算各帧的平均绝对幅度 MAV
+  final frameMavs = Int32List(numFrames);
+  for (var f = 0; f < numFrames; f++) {
+    final frameByteOffset = f * vadFrameStepBytes;
+    var sum = 0;
+    for (var i = 0; i < vadFrameSamples; i++) {
+      final sample = view.getInt16(frameByteOffset + i * 2, Endian.little);
+      sum += sample.abs();
+    }
+    frameMavs[f] = sum ~/ vadFrameSamples;
+  }
+
+  // 2. 滑动窗口平滑（半径 7 帧，覆盖约 150ms 窗口）
+  final smoothed = Int32List(numFrames);
+  const radius = 7;
+  var windowSum = 0;
+  var count = 0;
+  final initialEnd = radius < numFrames ? radius : numFrames - 1;
+  for (var f = 0; f <= initialEnd; f++) {
+    windowSum += frameMavs[f];
+    count++;
+  }
+  for (var f = 0; f < numFrames; f++) {
+    final right = f + radius;
+    if (right < numFrames && right > initialEnd) {
+      windowSum += frameMavs[right];
+      count++;
+    }
+    final left = f - radius - 1;
+    if (left >= 0) {
+      windowSum -= frameMavs[left];
+      count--;
+    }
+    smoothed[f] = count > 0 ? (windowSum ~/ count) : frameMavs[f];
+  }
+
+  // 3. 寻找连续静音区间（≥10 帧，即 ≥100ms）
+  final silenceIntervals = <({int start, int end})>[];
+  var inSilence = false;
+  var silenceStart = 0;
+  for (var f = 0; f < numFrames; f++) {
+    if (smoothed[f] <= vadSilenceThreshold) {
+      if (!inSilence) {
+        inSilence = true;
+        silenceStart = f;
+      }
+    } else {
+      if (inSilence) {
+        inSilence = false;
+        if (f - silenceStart >= 10) {
+          silenceIntervals.add((start: silenceStart, end: f - 1));
+        }
+      }
+    }
+  }
+  if (inSilence && numFrames - silenceStart >= 10) {
+    silenceIntervals.add((start: silenceStart, end: numFrames - 1));
+  }
+
+  // 4. 若有满足条件的静音区间，选取中心点最接近 target 的区间
+  if (silenceIntervals.isNotEmpty) {
+    var bestDiff = 0x7FFFFFFF;
+    var bestOffset = target;
+    for (final interval in silenceIntervals) {
+      final centerFrame = (interval.start + interval.end) ~/ 2;
+      final centerByte = centerFrame * vadFrameStepBytes + vadFrameBytes ~/ 2;
+      final diff = (centerByte - target).abs();
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestOffset = centerByte;
+      }
+    }
+    return (bestOffset.clamp(0, windowBytes.length)) & ~1;
+  }
+
+  // 5. 兜底策略：全段无明显静音时，寻找加权局部能量谷底
+  var minScore = 0x7FFFFFFF;
+  var bestFrame = numFrames ~/ 2;
+  for (var f = 0; f < numFrames; f++) {
+    final byteOffset = f * vadFrameStepBytes + vadFrameBytes ~/ 2;
+    final distanceSec = (byteOffset - target).abs() / wavBytesPerSecond;
+    final score = smoothed[f] + (distanceSec * 40).toInt();
+    if (score < minScore) {
+      minScore = score;
+      bestFrame = f;
+    }
+  }
+
+  final fallbackByte = bestFrame * vadFrameStepBytes + vadFrameBytes ~/ 2;
+  return (fallbackByte.clamp(0, windowBytes.length)) & ~1;
+}
+
+/// 对内存中的 PCM 字节应用 VAD 智能断句切片计划（主要供单测和内存音频使用）。
+List<AudioSegment> buildVadSegmentPlanFromBytes(Uint8List pcmBytes) {
+  final totalBytes = pcmBytes.length;
+  if (totalBytes <= 0) return const [];
+  if (totalBytes <= vadMaxSegmentBytes) {
+    return [(start: 0, end: totalBytes)];
+  }
+
+  final plan = <AudioSegment>[];
+  var currentStart = 0;
+  while (currentStart < totalBytes) {
+    final remaining = totalBytes - currentStart;
+    if (remaining <= vadMaxSegmentBytes) {
+      plan.add((start: currentStart, end: totalBytes));
+      break;
+    }
+
+    final windowStart = currentStart + vadMinSegmentBytes;
+    final windowEnd = currentStart + vadMaxSegmentBytes < totalBytes
+        ? currentStart + vadMaxSegmentBytes
+        : totalBytes;
+    final windowLength = windowEnd - windowStart;
+
+    if (windowLength <= vadFrameBytes) {
+      final cut = currentStart + vadNominalSegmentBytes < totalBytes
+          ? currentStart + vadNominalSegmentBytes
+          : totalBytes;
+      plan.add((start: currentStart, end: cut));
+      currentStart = cut;
+      continue;
+    }
+
+    final windowBytes = pcmBytes.sublist(windowStart, windowEnd);
+    final nominalOffset = vadNominalSegmentBytes - vadMinSegmentBytes;
+    final relativeCut = findOptimalSplitOffset(
+      windowBytes,
+      targetOffset: nominalOffset < windowLength ? nominalOffset : (windowLength ~/ 2),
+    );
+
+    var actualCut = windowStart + relativeCut;
+    if (actualCut <= currentStart) {
+      actualCut = currentStart + vadNominalSegmentBytes;
+    }
+    if (actualCut > totalBytes) {
+      actualCut = totalBytes;
+    }
+
+    plan.add((start: currentStart, end: actualCut));
+    currentStart = actualCut;
+  }
+
+  if (plan.length > maxSegmentCount) {
+    throw AudioInputException(durationLimitMessage(
+      Duration(seconds: totalBytes ~/ wavBytesPerSecond),
       limit: maxSegmentedDuration,
     ));
   }

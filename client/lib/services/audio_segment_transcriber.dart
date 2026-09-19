@@ -37,7 +37,7 @@ Future<String> transcribeSegmented(
   if (pcmBytes <= 0) {
     throw const AudioInputException('WAV 文件中没有可识别的音频数据');
   }
-  final plan = buildSegmentPlan(pcmBytes);
+  final plan = await buildVadSegmentPlan(wav16k, data.offset, pcmBytes);
   final total = plan.length;
 
   final texts = List<String?>.filled(total, null);
@@ -136,3 +136,78 @@ bool _isRetryable(DioException e) => switch (e.type) {
         true,
       _ => false,
     };
+
+/// 对文件中的 WAV PCM 数据应用 VAD 智能断句切片。
+///
+/// 仅在候选切片边界处按需读取 [vadMinSegmentSeconds] ~ [vadMaxSegmentSeconds] 字节块，
+/// 不将全量音频载入内存。
+Future<List<AudioSegment>> buildVadSegmentPlan(
+  File wav16k,
+  int dataOffset,
+  int pcmBytes,
+) async {
+  if (pcmBytes <= 0) return const [];
+  if (pcmBytes <= vadMaxSegmentBytes) {
+    return [(start: 0, end: pcmBytes)];
+  }
+
+  final plan = <AudioSegment>[];
+  final raf = await wav16k.open();
+  try {
+    var currentStart = 0;
+    while (currentStart < pcmBytes) {
+      final remaining = pcmBytes - currentStart;
+      if (remaining <= vadMaxSegmentBytes) {
+        plan.add((start: currentStart, end: pcmBytes));
+        break;
+      }
+
+      final windowStart = currentStart + vadMinSegmentBytes;
+      final windowEnd = currentStart + vadMaxSegmentBytes < pcmBytes
+          ? currentStart + vadMaxSegmentBytes
+          : pcmBytes;
+      final windowLength = windowEnd - windowStart;
+
+      if (windowLength <= vadFrameBytes) {
+        final cut = currentStart + vadNominalSegmentBytes < pcmBytes
+            ? currentStart + vadNominalSegmentBytes
+            : pcmBytes;
+        plan.add((start: currentStart, end: cut));
+        currentStart = cut;
+        continue;
+      }
+
+      await raf.setPosition(dataOffset + windowStart);
+      final windowBytes = await raf.read(windowLength);
+
+      final nominalOffset = vadNominalSegmentBytes - vadMinSegmentBytes;
+      final relativeCut = findOptimalSplitOffset(
+        windowBytes,
+        targetOffset: nominalOffset < windowBytes.length
+            ? nominalOffset
+            : (windowBytes.length ~/ 2),
+      );
+
+      var actualCut = windowStart + relativeCut;
+      if (actualCut <= currentStart) {
+        actualCut = currentStart + vadNominalSegmentBytes;
+      }
+      if (actualCut > pcmBytes) {
+        actualCut = pcmBytes;
+      }
+
+      plan.add((start: currentStart, end: actualCut));
+      currentStart = actualCut;
+    }
+  } finally {
+    await raf.close();
+  }
+
+  if (plan.length > maxSegmentCount) {
+    throw AudioInputException(durationLimitMessage(
+      Duration(seconds: pcmBytes ~/ wavBytesPerSecond),
+      limit: maxSegmentedDuration,
+    ));
+  }
+  return plan;
+}
