@@ -239,7 +239,7 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
         ),
         child: Row(
           children: [
-            Icon(FluentIcons.mic_on, color: theme.accentColor, size: 24),
+            Icon(FluentIcons.microphone, color: theme.accentColor, size: 24),
             const SizedBox(width: 10),
             Text(
               'ASR 语音转文字',
@@ -320,7 +320,7 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                 HoverButton(
                   onPressed: _loading ? null : _pickFile,
                   builder: (context, states) {
-                    final isHovered = states.isHovering;
+                    final isHovered = states.contains(WidgetState.hovered);
                     return Card(
                       padding: const EdgeInsets.symmetric(
                           vertical: 32, horizontal: 24),
@@ -360,7 +360,7 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                             ),
                           ] else ...[
                             Icon(
-                              FluentIcons.audio_file,
+                              FluentIcons.music_note,
                               size: 40,
                               color: theme.accentColor,
                             ),
@@ -501,7 +501,11 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
                               if (_loading) ...[
-                                const ProgressRing(size: 16),
+                                const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: ProgressRing(strokeWidth: 2.5),
+                                ),
                                 const SizedBox(width: 8),
                               ] else ...[
                                 const Icon(FluentIcons.speech, size: 16),
