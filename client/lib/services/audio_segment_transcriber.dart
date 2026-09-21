@@ -7,7 +7,7 @@ import 'asr_service.dart';
 import 'audio_format.dart';
 
 /// 分段转写的并发数。若 MiMo 侧限流明显可下调。
-const int segmentConcurrency = 4;
+const int segmentConcurrency = 16;
 
 /// 每段最多尝试次数（1 次首发 + 3 次重试）。
 const int segmentMaxAttempts = 4;
