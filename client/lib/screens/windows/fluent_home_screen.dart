@@ -27,14 +27,24 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
   String _language = 'auto';
   String _result = '';
   bool _loading = false;
+  bool _retrying = false;
   String? _error;
   AudioFormat? _format;
   AudioStage? _stage;
+  String? _statusMessage;
   int _segDone = 0;
   int _segTotal = 0;
+  TranscribeResult? _lastResult;
 
   String get _stageLabel {
+    if (_retrying) {
+      return _statusMessage ??
+          (_segTotal > 0
+              ? '正在补转失败分段 $_segDone/$_segTotal 段...'
+              : '正在补转失败分段...');
+    }
     if (!_loading) return '开始识别';
+    if (_statusMessage != null) return _statusMessage!;
     return switch (_stage) {
       AudioStage.converting => '正在转换音频为 16kHz WAV...',
       AudioStage.segmentTranscribing => _segTotal > 0
@@ -43,7 +53,6 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
       _ => '正在上传并识别...',
     };
   }
-
   late AsrService _asr;
 
   @override
@@ -98,9 +107,12 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
 
     setState(() {
       _loading = true;
+      _retrying = false;
       _error = null;
       _result = '';
+      _lastResult = null;
       _stage = null;
+      _statusMessage = null;
       _segDone = 0;
       _segTotal = 0;
     });
@@ -120,12 +132,17 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
             });
           }
         },
+        onStatusMessage: (msg) {
+          if (mounted) setState(() => _statusMessage = msg);
+        },
       );
       if (mounted) {
         setState(() {
           _result = res.text;
+          _lastResult = res;
           _loading = false;
           _stage = null;
+          _statusMessage = null;
         });
       }
     } on DioException catch (e) {
@@ -151,6 +168,65 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
           _error = e.toString();
           _loading = false;
           _stage = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _retryFailedSegments() async {
+    if (_retrying || _loading || _lastResult == null || !_lastResult!.isPartial) {
+      return;
+    }
+
+    setState(() {
+      _retrying = true;
+      _error = null;
+      _statusMessage = '正在自动补转失败分段...';
+      _segDone = 0;
+      _segTotal = _lastResult!.failedIndices.length;
+    });
+
+    try {
+      final res = await _asr.retryFailedSegments(
+        onProgress: (done, total) {
+          if (mounted) {
+            setState(() {
+              _segDone = done;
+              _segTotal = total;
+            });
+          }
+        },
+        onStatusMessage: (msg) {
+          if (mounted) setState(() => _statusMessage = msg);
+        },
+      );
+
+      if (mounted) {
+        setState(() {
+          _result = res.text;
+          _lastResult = res;
+          _retrying = false;
+          _statusMessage = null;
+        });
+
+        if (!res.isPartial) {
+          displayInfoBar(
+            context,
+            builder: (context, close) => InfoBar(
+              title: const Text('重试完成'),
+              content: const Text('所有失败分段已成功补转完成'),
+              severity: InfoBarSeverity.success,
+              onClose: close,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = '补转失败: $e';
+          _retrying = false;
+          _statusMessage = null;
         });
       }
     }
@@ -526,7 +602,7 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                 ),
 
                 // Progress Indicator
-                if (_loading) ...[
+                if (_loading || _retrying) ...[
                   const SizedBox(height: 16),
                   Card(
                     padding: const EdgeInsets.all(16),
@@ -574,6 +650,32 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                     severity: InfoBarSeverity.error,
                     isLong: true,
                     onClose: () => setState(() => _error = null),
+                  ),
+                ],
+
+                // Partial Success Warning InfoBar
+                if (_lastResult != null &&
+                    _lastResult!.isPartial &&
+                    !_loading) ...[
+                  const SizedBox(height: 16),
+                  InfoBar(
+                    title: Text(
+                        '转写完成（${_lastResult!.successCount}/${_lastResult!.totalSegments} 段成功）'),
+                    content: Text(
+                      '第 ${_lastResult!.failedSegmentsDisplay} 段未转写成功，已为您保留全部成功内容。您可以点击右侧按钮重试失败段落。',
+                    ),
+                    severity: InfoBarSeverity.warning,
+                    isLong: true,
+                    action: _retrying
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: ProgressRing(strokeWidth: 2.5),
+                          )
+                        : Button(
+                            onPressed: _retryFailedSegments,
+                            child: const Text('重试失败分段'),
+                          ),
                   ),
                 ],
 

@@ -26,14 +26,24 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
   String _language = 'auto';
   String _result = '';
   bool _loading = false;
+  bool _retrying = false;
   String? _error;
   AudioFormat? _format;
   AudioStage? _stage;
+  String? _statusMessage;
   int _segDone = 0;
   int _segTotal = 0;
+  TranscribeResult? _lastResult;
 
   String get _stageLabel {
+    if (_retrying) {
+      return _statusMessage ??
+          (_segTotal > 0
+              ? '正在补转失败分段 $_segDone/$_segTotal 段...'
+              : '正在补转失败分段...');
+    }
     if (!_loading) return '开始识别';
+    if (_statusMessage != null) return _statusMessage!;
     return switch (_stage) {
       AudioStage.converting => '正在转换音频...',
       AudioStage.segmentTranscribing => _segTotal > 0
@@ -42,7 +52,6 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
       _ => '正在识别...',
     };
   }
-
   late AsrService _asr;
 
   @override
@@ -98,9 +107,12 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
 
     setState(() {
       _loading = true;
+      _retrying = false;
       _error = null;
       _result = '';
+      _lastResult = null;
       _stage = null;
+      _statusMessage = null;
       _segDone = 0;
       _segTotal = 0;
     });
@@ -120,12 +132,17 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
             });
           }
         },
+        onStatusMessage: (msg) {
+          if (mounted) setState(() => _statusMessage = msg);
+        },
       );
       if (mounted) {
         setState(() {
           _result = res.text;
+          _lastResult = res;
           _loading = false;
           _stage = null;
+          _statusMessage = null;
         });
       }
     } on DioException catch (e) {
@@ -151,6 +168,65 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
           _error = e.toString();
           _loading = false;
           _stage = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _retryFailedSegments() async {
+    if (_retrying || _loading || _lastResult == null || !_lastResult!.isPartial) {
+      return;
+    }
+
+    setState(() {
+      _retrying = true;
+      _error = null;
+      _statusMessage = '正在自动补转失败分段...';
+      _segDone = 0;
+      _segTotal = _lastResult!.failedIndices.length;
+    });
+
+    try {
+      final res = await _asr.retryFailedSegments(
+        onProgress: (done, total) {
+          if (mounted) {
+            setState(() {
+              _segDone = done;
+              _segTotal = total;
+            });
+          }
+        },
+        onStatusMessage: (msg) {
+          if (mounted) setState(() => _statusMessage = msg);
+        },
+      );
+
+      if (mounted) {
+        setState(() {
+          _result = res.text;
+          _lastResult = res;
+          _retrying = false;
+          _statusMessage = null;
+        });
+
+        if (!res.isPartial) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('所有失败分段已成功补转完成'),
+              backgroundColor: Colors.green.shade700,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8)),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = '补转失败: $e';
+          _retrying = false;
+          _statusMessage = null;
         });
       }
     }
@@ -201,6 +277,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
   void _showSettings() {
     final keyCtrl = TextEditingController(text: widget.config.apiKey);
     bool obscure = true;
+    int concurrency = widget.config.concurrency;
 
     showDialog(
       context: context,
@@ -215,6 +292,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               TextField(
                 controller: keyCtrl,
@@ -228,7 +306,46 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                 ),
                 obscureText: obscure,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '分段并发数',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                  ),
+                  Text(
+                    '$concurrency 路',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              Slider(
+                value: concurrency.toDouble(),
+                min: 1,
+                max: 16,
+                divisions: 15,
+                label: '$concurrency',
+                onChanged: (val) {
+                  setDialogState(() => concurrency = val.round());
+                },
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: Text(
+                  '推荐 4~8 路并发；过高易触发 API 429 限流',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Colors.grey,
+                        fontSize: 11,
+                      ),
+                ),
+              ),
+              const SizedBox(height: 12),
               Text(
                 'API 地址: ${widget.config.baseUrl}',
                 style: Theme.of(context).textTheme.bodySmall?.copyWith(
@@ -244,7 +361,10 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
             ),
             FilledButton(
               onPressed: () async {
-                await widget.config.save(apiKey: keyCtrl.text.trim());
+                await widget.config.save(
+                  apiKey: keyCtrl.text.trim(),
+                  concurrency: concurrency,
+                );
                 _asr.dispose();
                 _asr = AsrService(widget.config);
                 if (ctx.mounted) Navigator.pop(ctx);
@@ -510,6 +630,14 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                           ),
                         ),
                       ),
+                      // Linear Progress Bar during segmentation or retry
+                      if ((_loading || _retrying) && _segTotal > 0) ...[
+                        const SizedBox(height: 12),
+                        LinearProgressIndicator(
+                          value: _segDone / _segTotal,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ],
 
                       // Error
                       if (_error != null) ...[
@@ -539,6 +667,66 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                         ),
                       ],
 
+                      // Partial Success Banner
+                      if (_lastResult != null &&
+                          _lastResult!.isPartial &&
+                          !_loading) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.amber.shade50,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.amber.shade300),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.warning_amber_rounded,
+                                      color: Colors.amber.shade900, size: 20),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      '转写完成（${_lastResult!.successCount}/${_lastResult!.totalSegments} 段成功）',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                        color: Colors.amber.shade900,
+                                      ),
+                                    ),
+                                  ),
+                                  if (_retrying)
+                                    const SizedBox(
+                                      width: 18,
+                                      height: 18,
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 2),
+                                    )
+                                  else
+                                    FilledButton.tonal(
+                                      onPressed: _retryFailedSegments,
+                                      style: FilledButton.styleFrom(
+                                        visualDensity: VisualDensity.compact,
+                                      ),
+                                      child: const Text('重试失败段'),
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                '第 ${_lastResult!.failedSegmentsDisplay} 段未转写成功，已为您保留全部成功内容。您可以点击右侧按钮重试失败段落。',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.amber.shade900,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       // Result
                       if (_result.isNotEmpty) ...[
                         const SizedBox(height: 20),

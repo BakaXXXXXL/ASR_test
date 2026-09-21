@@ -9,7 +9,7 @@ Future<void> showFluentSettingsDialog(
 }) async {
   final keyCtrl = TextEditingController(text: config.apiKey);
   bool obscure = true;
-
+  int concurrency = config.concurrency;
   await showDialog<void>(
     context: context,
     builder: (ctx) => StatefulBuilder(
@@ -40,6 +40,30 @@ Future<void> showFluentSettingsDialog(
                 ),
               ),
             ),
+            const SizedBox(height: 14),
+            InfoLabel(
+              label: '分段转写并发数 ($concurrency 路)',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Slider(
+                    min: 1,
+                    max: 16,
+                    value: concurrency.toDouble(),
+                    onChanged: (val) =>
+                        setDialogState(() => concurrency = val.round()),
+                  ),
+                  Text(
+                    '推荐 4~8 路并发；过高易触发 API 429 限流',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color:
+                          FluentTheme.of(ctx).resources.textFillColorSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 12),
             Text(
               '接口地址: ${config.baseUrl}',
@@ -57,7 +81,10 @@ Future<void> showFluentSettingsDialog(
           ),
           FilledButton(
             onPressed: () async {
-              await config.save(apiKey: keyCtrl.text.trim());
+              await config.save(
+                apiKey: keyCtrl.text.trim(),
+                concurrency: concurrency,
+              );
               onSaved();
               if (ctx.mounted) Navigator.pop(ctx);
             },
