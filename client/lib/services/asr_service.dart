@@ -70,8 +70,19 @@ class TranscribeResult {
   String get failedSegmentsDisplay =>
       failedIndices.map((i) => (i + 1).toString()).join('、');
 
-  factory TranscribeResult.fromJson(Map<String, dynamic> json) {
-    final choices = json['choices'] as List<dynamic>?;
+  factory TranscribeResult.fromJson(dynamic data) {
+    if (data is! Map<String, dynamic> && data is! Map) {
+      return TranscribeResult(text: cleanAsrText(data?.toString() ?? ''));
+    }
+    final map = data as Map;
+
+    // 1. OpenAI Audio Transcriptions 规范返回: {"text": "..."}
+    if (map.containsKey('text') && map['text'] is String) {
+      return TranscribeResult(text: cleanAsrText(map['text'] as String));
+    }
+
+    // 2. Chat Completions 规范返回: {"choices": [{"message": {"content": "..."}}]}
+    final choices = map['choices'] as List<dynamic>?;
     String text = '';
     if (choices != null && choices.isNotEmpty) {
       final message = choices[0]['message'];
@@ -81,7 +92,7 @@ class TranscribeResult {
           text = content;
         } else if (content is List) {
           text = content
-              .where((c) => c['type'] == 'text')
+              .where((c) => c is Map && c['type'] == 'text')
               .map((c) => c['text'])
               .join();
         }
@@ -99,16 +110,32 @@ class AsrService {
 
   TranscribeSession? get activeSession => _activeSession;
 
-  AsrService(this.config) {
-    _dio = Dio(BaseOptions(
-      baseUrl: config.baseUrl,
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(minutes: 5),
-      headers: {
-        'Authorization': 'Bearer ${config.apiKey}',
-        'Content-Type': 'application/json',
-      },
-    ));
+  AsrService(this.config, {Dio? dio}) {
+    final headers = <String, dynamic>{};
+    if (config.apiKey.isNotEmpty) {
+      headers['Authorization'] = 'Bearer ${config.apiKey}';
+    }
+    if (dio != null) {
+      _dio = dio;
+      if (_dio.options.baseUrl.isEmpty) {
+        _dio.options.baseUrl = config.baseUrl;
+      }
+      _dio.options.headers.addAll(headers);
+    } else {
+      _dio = Dio(BaseOptions(
+        baseUrl: config.baseUrl,
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(minutes: 5),
+        headers: headers,
+      ));
+    }
+  }
+
+  /// 安全 URL 端点合成器，防止 Dio 默认解析导致 `/v1` 等路径前缀被剥离
+  static String buildEndpoint(String baseUrl, String path) {
+    final normalizedBase = baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
+    final normalizedPath = path.startsWith('/') ? path.substring(1) : path;
+    return Uri.parse(normalizedBase).resolve(normalizedPath).toString();
   }
 
   /// 释放底层 HTTP 连接与未清理的会话临时文件。
@@ -298,31 +325,60 @@ class AsrService {
     void Function(AudioStage stage)? onStage,
     CancelToken? cancelToken,
   }) async {
-    final dataUrl =
-        'data:${mimeTypeOf(format)};base64,${base64Encode(bytes)}';
-
-    final body = {
-      'model': 'mimo-v2.5-asr',
-      'messages': [
-        {
-          'role': 'user',
-          'content': [
-            {
-              'type': 'input_audio',
-              'input_audio': {'data': dataUrl},
-            }
-          ],
-        }
-      ],
-      'extra_body': {
-        'asr_options': {'language': language}
-      },
-    };
-
     onStage?.call(AudioStage.uploading);
-    final response = await _dio.post('/chat/completions',
-        data: body, cancelToken: cancelToken);
-    return TranscribeResult.fromJson(response.data);
+
+    if (config.protocol == AsrProtocol.audioTranscriptions) {
+      final endpoint = buildEndpoint(config.baseUrl, 'audio/transcriptions');
+      final ext = format.name;
+      final formDataMap = <String, dynamic>{
+        'file': MultipartFile.fromBytes(bytes, filename: 'audio.$ext'),
+        'model': config.model,
+        'response_format': 'json',
+      };
+      if (language != 'auto') {
+        formDataMap['language'] = language;
+      }
+      final formData = FormData.fromMap(formDataMap);
+      final response = await _dio.post(
+        endpoint,
+        data: formData,
+        cancelToken: cancelToken,
+      );
+      return TranscribeResult.fromJson(response.data);
+    } else {
+      final endpoint = buildEndpoint(config.baseUrl, 'chat/completions');
+      final dataUrl =
+          'data:${mimeTypeOf(format)};base64,${base64Encode(bytes)}';
+
+      final body = <String, dynamic>{
+        'model': config.model,
+        'messages': [
+          {
+            'role': 'user',
+            'content': [
+              {
+                'type': 'input_audio',
+                'input_audio': {'data': dataUrl},
+              }
+            ],
+          }
+        ],
+      };
+
+      if (config.model.contains('mimo') || config.provider == 'mimo') {
+        body['extra_body'] = {
+          'asr_options': {'language': language},
+        };
+      }
+
+      final response = await _dio.post(
+        endpoint,
+        data: body,
+        options: Options(contentType: 'application/json'),
+        cancelToken: cancelToken,
+      );
+      return TranscribeResult.fromJson(response.data);
+    }
   }
 
   /// 只读文件头识别真实格式（扩展名不可信，也不必把整个文件读进内存）。

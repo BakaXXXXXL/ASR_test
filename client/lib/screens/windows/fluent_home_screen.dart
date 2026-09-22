@@ -299,7 +299,7 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = FluentTheme.of(context);
-    final hasKey = widget.config.apiKey.isNotEmpty;
+    final isReady = widget.config.isConfigured;
 
     return ScaffoldPage.scrollable(
       header: Container(
@@ -332,7 +332,7 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                 borderRadius: BorderRadius.circular(4),
               ),
               child: Text(
-                'MiMo-V2.5',
+                widget.config.badgeText,
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w600,
@@ -345,12 +345,12 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: hasKey
+                color: isReady
                     ? Colors.green.withValues(alpha: 0.12)
                     : Colors.orange.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: hasKey
+                  color: isReady
                       ? Colors.green.withValues(alpha: 0.3)
                       : Colors.orange.withValues(alpha: 0.3),
                 ),
@@ -359,17 +359,17 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    hasKey ? FluentIcons.check_mark : FluentIcons.warning,
+                    isReady ? FluentIcons.check_mark : FluentIcons.warning,
                     size: 12,
-                    color: hasKey ? Colors.green : Colors.orange,
+                    color: isReady ? Colors.green : Colors.orange,
                   ),
                   const SizedBox(width: 5),
                   Text(
-                    hasKey ? '已就绪' : '未配置 Key',
+                    isReady ? '已就绪' : '未配置服务',
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
-                      color: hasKey ? Colors.green : Colors.orange,
+                      color: isReady ? Colors.green : Colors.orange,
                     ),
                   ),
                 ],
@@ -569,7 +569,7 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                         child: FilledButton(
                           onPressed: (_selectedFile != null &&
                                   !_loading &&
-                                  hasKey &&
+                                  isReady &&
                                   _format != null)
                               ? _transcribe
                               : null,

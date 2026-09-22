@@ -275,6 +275,10 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
   }
 
   void _showSettings() {
+    String selectedProvider = widget.config.provider;
+    AsrProtocol selectedProtocol = widget.config.protocol;
+    final urlCtrl = TextEditingController(text: widget.config.baseUrl);
+    final modelCtrl = TextEditingController(text: widget.config.model);
     final keyCtrl = TextEditingController(text: widget.config.apiKey);
     bool obscure = true;
     int concurrency = widget.config.concurrency;
@@ -282,98 +286,189 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
     showDialog(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialogState) => AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.tune, size: 22),
-              SizedBox(width: 8),
-              Text('API 设置'),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              TextField(
-                controller: keyCtrl,
-                decoration: InputDecoration(
-                  labelText: 'MiMo API Key',
-                  hintText: '从 platform.xiaomimimo.com 获取',
-                  suffixIcon: IconButton(
-                    icon: Icon(obscure ? Icons.visibility_off : Icons.visibility),
-                    onPressed: () => setDialogState(() => obscure = !obscure),
-                  ),
-                ),
-                obscureText: obscure,
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    '分段并发数',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                  Text(
-                    '$concurrency 路',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.primary,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ],
-              ),
-              Slider(
-                value: concurrency.toDouble(),
-                min: 1,
-                max: 16,
-                divisions: 15,
-                label: '$concurrency',
-                onChanged: (val) {
-                  setDialogState(() => concurrency = val.round());
-                },
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Text(
-                  '推荐 4~8 路并发；过高易触发 API 429 限流',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: Colors.grey,
-                        fontSize: 11,
+        builder: (ctx, setDialogState) {
+          final currentPreset = asrPresets.firstWhere(
+            (p) => p.id == selectedProvider,
+            orElse: () => asrPresets.firstWhere((p) => p.id == 'custom'),
+          );
+
+          return AlertDialog(
+            title: const Row(
+              children: [
+                Icon(Icons.tune, size: 22),
+                SizedBox(width: 8),
+                Text('ASR 服务商与 API 设置'),
+              ],
+            ),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedProvider,
+                      decoration: const InputDecoration(
+                        labelText: '服务商预设',
+                        prefixIcon: Icon(Icons.cloud_outlined, size: 20),
                       ),
+                      items: asrPresets
+                          .map((p) => DropdownMenuItem(
+                                value: p.id,
+                                child: Text(p.name),
+                              ))
+                          .toList(),
+                      onChanged: (val) {
+                        if (val == null) return;
+                        setDialogState(() {
+                          selectedProvider = val;
+                          final preset = asrPresets.firstWhere((p) => p.id == val);
+                          if (preset.id != 'custom') {
+                            urlCtrl.text = preset.defaultBaseUrl;
+                            modelCtrl.text = preset.defaultModel;
+                            selectedProtocol = preset.protocol;
+                          }
+                        });
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<AsrProtocol>(
+                      initialValue: selectedProtocol,
+                      decoration: const InputDecoration(
+                        labelText: '接口协议规范',
+                        prefixIcon: Icon(Icons.swap_horiz, size: 20),
+                      ),
+                      items: const [
+                        DropdownMenuItem(
+                          value: AsrProtocol.audioTranscriptions,
+                          child: Text(
+                              'OpenAI Whisper 规范 (/audio/transcriptions)'),
+                        ),
+                        DropdownMenuItem(
+                          value: AsrProtocol.chatCompletions,
+                          child: Text('OpenAI Chat 规范 (/chat/completions)'),
+                        ),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() => selectedProtocol = val);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: urlCtrl,
+                      decoration: const InputDecoration(
+                        labelText: '接口地址 (Base URL)',
+                        hintText: 'https://api.example.com/v1',
+                        prefixIcon: Icon(Icons.link, size: 20),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: modelCtrl,
+                      decoration: const InputDecoration(
+                        labelText: '模型名称 (Model)',
+                        hintText: '例如: whisper-1 或 SenseVoiceSmall',
+                        prefixIcon: Icon(Icons.model_training, size: 20),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: keyCtrl,
+                      decoration: InputDecoration(
+                        labelText: 'API Key',
+                        hintText: currentPreset.apiKeyHint,
+                        prefixIcon: const Icon(Icons.key, size: 20),
+                        suffixIcon: IconButton(
+                          icon: Icon(obscure
+                              ? Icons.visibility_off
+                              : Icons.visibility),
+                          onPressed: () =>
+                              setDialogState(() => obscure = !obscure),
+                        ),
+                      ),
+                      obscureText: obscure,
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          '分段并发数',
+                          style:
+                              Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                        ),
+                        Text(
+                          '$concurrency 路',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.primary,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Slider(
+                      value: concurrency.toDouble(),
+                      min: 1,
+                      max: 16,
+                      divisions: 15,
+                      label: '$concurrency',
+                      onChanged: (val) {
+                        setDialogState(() => concurrency = val.round());
+                      },
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        '推荐 4~8 路并发；过高易触发 API 429 限流',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.grey,
+                              fontSize: 11,
+                            ),
+                      ),
+                    ),
+                    if (currentPreset.portalUrl != null) ...[
+                      const SizedBox(height: 12),
+                      Text(
+                        '官网控制台: ${currentPreset.portalUrl}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Colors.grey,
+                            ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
-              Text(
-                'API 地址: ${widget.config.baseUrl}',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Colors.grey,
-                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  await widget.config.save(
+                    provider: selectedProvider,
+                    protocol: selectedProtocol,
+                    baseUrl: urlCtrl.text.trim(),
+                    model: modelCtrl.text.trim(),
+                    apiKey: keyCtrl.text.trim(),
+                    concurrency: concurrency,
+                  );
+                  _asr.dispose();
+                  _asr = AsrService(widget.config);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                  setState(() {});
+                },
+                child: const Text('保存'),
               ),
             ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                await widget.config.save(
-                  apiKey: keyCtrl.text.trim(),
-                  concurrency: concurrency,
-                );
-                _asr.dispose();
-                _asr = AsrService(widget.config);
-                if (ctx.mounted) Navigator.pop(ctx);
-                setState(() {});
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -387,7 +482,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final hasKey = widget.config.apiKey.isNotEmpty;
+    final isReady = widget.config.isConfigured;
 
     return Scaffold(
       body: Column(
@@ -423,7 +518,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
-                      'MiMo-V2.5',
+                      widget.config.badgeText,
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w500,
@@ -437,7 +532,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                     decoration: BoxDecoration(
-                      color: hasKey
+                      color: isReady
                           ? Colors.green.withValues(alpha: 0.1)
                           : cs.errorContainer,
                       borderRadius: BorderRadius.circular(8),
@@ -446,19 +541,19 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          hasKey
+                          isReady
                               ? Icons.check_circle_outline
                               : Icons.warning_amber,
                           size: 14,
-                          color: hasKey ? Colors.green.shade700 : cs.error,
+                          color: isReady ? Colors.green.shade700 : cs.error,
                         ),
                         const SizedBox(width: 4),
                         Text(
-                          hasKey ? '已连接' : '未配置 Key',
+                          isReady ? '已就绪' : '未配置服务',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w500,
-                            color: hasKey ? Colors.green.shade700 : cs.error,
+                            color: isReady ? Colors.green.shade700 : cs.error,
                           ),
                         ),
                       ],
@@ -609,7 +704,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                         child: FilledButton.icon(
                           onPressed: (_selectedFile != null &&
                                   !_loading &&
-                                  hasKey &&
+                                  isReady &&
                                   _format != null)
                               ? _transcribe
                               : null,
