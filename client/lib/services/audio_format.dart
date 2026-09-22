@@ -365,12 +365,91 @@ Uint8List buildWavHeader(int pcmLength) {
   throw const AudioInputException('WAV 文件中未找到 data 块');
 }
 
-/// 按段序合并识别文本：去掉空白段，段间换行分隔。
+/// 清洗 ASR 识别结果文本，消除模型幻觉、特殊控制 Token 及无意义重复占位符。
+///
+/// 1. 过滤模型特殊标记：如 `<chinese>`, `<english>`, `<silence>`, `<music>`, `<|zh|>`, `[BLANK]` 等。
+/// 2. 避免误伤数学符号：`<...>` 正则要求无空格，绝不影响 `r < R`、`a < b` 等不等式。
+/// 3. 过滤极端重复循环（Repetition Hallucination）。
+/// 4. 实质语音字符校验：剥离特殊标记后若无汉字/英文字母/数字（仅剩残留标点或空白），直接返回空字符串。
+String cleanAsrText(String text) {
+  if (text.isEmpty) return '';
+
+  // 1. 过滤模型无空格的特殊 Token 与语言/副语言标签
+  var cleaned = text.replaceAll(RegExp(r'<\|?[a-zA-Z][a-zA-Z0-9_\-]*\|?>'), '');
+
+  // 匹配 ASR 方括号事件标签: [BLANK], [silence], [music], [applause], [laughter] 等
+  cleaned = cleaned.replaceAll(
+    RegExp(
+      r'\[(BLANK|blank|silence|music|applause|laughter|whisper|cough|screaming|snort|pant|null)\]',
+      caseSensitive: false,
+    ),
+    '',
+  );
+
+  // 匹配圆括号事件标签: (music), (applause), (silence), (laughter) 等
+  cleaned = cleaned.replaceAll(
+    RegExp(
+      r'\((music|applause|silence|laughter|whisper|cough)\)',
+      caseSensitive: false,
+    ),
+    '',
+  );
+
+  cleaned = cleaned.trim();
+  if (cleaned.isEmpty) return '';
+
+  // 2. 实质内容校验：若完全不包含汉字、字母或数字（例如仅剩剥除残留的标点符号 ，。！？ 等），判定为空
+  if (!RegExp(r'[\u4e00-\u9fa5a-zA-Z0-9]').hasMatch(cleaned)) {
+    return '';
+  }
+
+  // 3. 过滤极端重复循环 (Repetition Hallucination)
+  // 空格拆分多词完全一致且重复 5 次以上（如 "啊 啊 啊 啊 啊"）
+  final tokens = cleaned.split(RegExp(r'\s+'));
+  if (tokens.length >= 5 && tokens.toSet().length == 1) {
+    return '';
+  }
+
+  // 单个中文字符无空格连续重复 10 次以上（如 "啊啊啊啊啊啊啊啊啊啊"）
+  if (cleaned.length >= 10 && cleaned.runes.toSet().length == 1) {
+    return '';
+  }
+
+  return cleaned;
+}
+
+/// 检测一段 16kHz 16-bit 单声道 PCM 数据是否为完全无声/静音。
+///
+/// 若整段数据的最大绝对振幅低于 [maxThreshold]（默认 150，约等于满量程 0.45%），
+/// 且平均绝对幅度（MAV）低于 [mavThreshold]（默认 35），判定为数字静音或无声段落。
+bool isSilentAudio(
+  Uint8List pcmBytes, {
+  int maxThreshold = 150,
+  int mavThreshold = 35,
+}) {
+  if (pcmBytes.isEmpty) return true;
+  final numSamples = pcmBytes.length ~/ 2;
+  if (numSamples == 0) return true;
+
+  final view = ByteData.sublistView(pcmBytes);
+  var maxAmp = 0;
+  var sum = 0;
+  for (var i = 0; i < numSamples; i++) {
+    final sample = view.getInt16(i * 2, Endian.little).abs();
+    if (sample > maxAmp) {
+      maxAmp = sample;
+    }
+    sum += sample;
+  }
+  final mav = sum ~/ numSamples;
+  return maxAmp < maxThreshold && mav < mavThreshold;
+}
+
+/// 按段序合并识别文本：清洗 ASR 标记与幻觉，去掉空白段，段间换行分隔。
 String mergeSegmentTexts(List<String> texts) => texts
-    .map((t) => t.trim())
+    .map((t) => cleanAsrText(t).trim())
     .where((t) => t.isNotEmpty)
     .join('\n');
-
 /// 体积超限的提示文案。
 String sizeLimitMessage(int rawBytes) {
   final mb = base64LengthFor(rawBytes) / (1024 * 1024);

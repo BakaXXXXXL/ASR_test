@@ -87,7 +87,7 @@ class TranscribeResult {
         }
       }
     }
-    return TranscribeResult(text: text);
+    return TranscribeResult(text: cleanAsrText(text));
   }
 }
 

@@ -212,10 +212,18 @@ Future<SegmentTranscribeResult> transcribeSegmented(
         try {
           final pcm = await _readRange(
               wav16k, data.offset + segment.start, segment.end - segment.start);
+          if (isSilentAudio(pcm)) {
+            texts[idx] = '';
+            errors.remove(idx);
+            doneCount++;
+            onProgress?.call(doneCount, total);
+            lastError = null;
+            break;
+          }
           final wavBytes = _wrapWav(pcm);
           final cancelToken = CancelToken();
           final result = await requestOne(wavBytes, cancelToken);
-          texts[idx] = result.text;
+          texts[idx] = cleanAsrText(result.text);
           errors.remove(idx);
           rateLimiter.recordSuccess();
           doneCount++;
@@ -286,10 +294,18 @@ Future<SegmentTranscribeResult> transcribeSegmented(
         try {
           final pcm = await _readRange(
               wav16k, data.offset + segment.start, segment.end - segment.start);
+          if (isSilentAudio(pcm)) {
+            texts[idx] = '';
+            errors.remove(idx);
+            doneCount++;
+            onProgress?.call(doneCount, total);
+            lastError = null;
+            break;
+          }
           final wavBytes = _wrapWav(pcm);
           final cancelToken = CancelToken();
           final result = await requestOne(wavBytes, cancelToken);
-          texts[idx] = result.text;
+          texts[idx] = cleanAsrText(result.text);
           errors.remove(idx);
           rateLimiter.recordSuccess();
           doneCount++;

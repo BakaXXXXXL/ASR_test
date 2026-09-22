@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
@@ -377,6 +378,119 @@ void main() {
       final plan = buildVadSegmentPlanFromBytes(shortBytes);
       expect(plan.length, 1);
       expect(plan[0], (start: 0, end: shortBytes.length));
+    });
+  });
+
+  group('cleanAsrText ASR 标记与幻觉占位符清洗', () {
+    test('过滤单个及连续重复的 <chinese> 等模型控制 Token', () {
+      expect(cleanAsrText('<chinese>'), '');
+      expect(cleanAsrText('<chinese> <chinese> <chinese>'), '');
+      final repeated296 = List.filled(296, '<chinese>').join(' ');
+      expect(cleanAsrText(repeated296), '');
+    });
+
+    test('过滤其他语言和副语言标记', () {
+      expect(cleanAsrText('<english> <cantonese> <|zh|> <unk> <silence>'), '');
+      expect(cleanAsrText('[BLANK]'), '');
+      expect(cleanAsrText('[silence]'), '');
+      expect(cleanAsrText('(music)'), '');
+      expect(cleanAsrText('[applause]'), '');
+    });
+
+    test('混合有效语音时剥离标记保留人声正文', () {
+      expect(cleanAsrText('<chinese> 大家好，欢迎来听物理课 [applause]'), '大家好，欢迎来听物理课');
+      expect(cleanAsrText('库仑定律 <silence> 描述点电荷受力'), '库仑定律  描述点电荷受力');
+    });
+
+    test('严格保护数学/物理不等式符号不受影响', () {
+      expect(cleanAsrText('当 r < R 时，E = 0；当 r > R 时，E > 0'),
+          '当 r < R 时，E = 0；当 r > R 时，E > 0');
+      expect(cleanAsrText('如果 a < b 且 c > d'), '如果 a < b 且 c > d');
+    });
+
+    test('剥除标记后残留纯标点符号直接视为空', () {
+      expect(cleanAsrText('<chinese>, <chinese>。'), '');
+      expect(cleanAsrText('<chinese>...'), '');
+      expect(cleanAsrText('，。！？'), '');
+    });
+
+    test('过滤极端单字或单词重复死循环', () {
+      expect(cleanAsrText('啊 啊 啊 啊 啊 啊 啊'), '');
+      expect(cleanAsrText('谢谢 谢谢 谢谢 谢谢 谢谢'), '');
+      expect(cleanAsrText('啊啊啊啊啊啊啊啊啊啊啊啊'), '');
+      // 正常短语重复表达（非死循环）保留
+      expect(cleanAsrText('好的好的'), '好的好的');
+      expect(cleanAsrText('对对对'), '对对对');
+    });
+
+    test('mergeSegmentTexts 自动过滤被清洗为空的幻觉段落', () {
+      final inputSegments = [
+        '第一段有效讲义',
+        '<chinese> <chinese> <chinese>',
+        '第二段有效讲义',
+        '[BLANK]',
+        '<chinese>, <chinese>。',
+      ];
+      expect(mergeSegmentTexts(inputSegments), '第一段有效讲义\n第二段有效讲义');
+    });
+
+    test('长录音尾部幻觉清洗：彻底清除尾段 <chinese> 标记并保留正文', () {
+      final inputLines = [
+        '我们整个第九章的核心内容是电场的两个参数，电场强度和电势。',
+        '啊，那么这样的话，我就求出来了，R正减去R负应该等于。',
+        List.filled(296, '<chinese>').join(' '),
+      ];
+      final merged = mergeSegmentTexts(inputLines);
+      expect(merged.split('\n').length, 2);
+      expect(merged, isNot(contains('<chinese>')));
+      expect(merged, contains('R正减去R负'));
+    });
+
+    test('真实课堂样本回放回归测试：彻底清除第 50 行 <chinese> 幻觉', () {
+      var sampleFile = File('周二 11点10分大物续_20260922_134154.txt');
+      if (!sampleFile.existsSync()) {
+        sampleFile = File('../周二 11点10分大物续_20260922_134154.txt');
+      }
+      if (sampleFile.existsSync()) {
+        final lines = sampleFile.readAsLinesSync();
+        expect(lines.length, 50);
+        // 第 50 行在原始文件中包含大量 <chinese>
+        expect(lines[49], contains('<chinese>'));
+
+        final merged = mergeSegmentTexts(lines);
+        final mergedLines = merged.split('\n');
+        // 清洗合并后，第 50 行被完全过滤，总行数变为 49
+        expect(mergedLines.length, 49);
+        expect(merged, isNot(contains('<chinese>')));
+        // 前 49 行内容逐行保留
+        expect(mergedLines[0], contains('第九章的核心内容'));
+        expect(mergedLines[48], contains('R正减去R负'));
+      }
+    });
+  });
+
+  group('isSilentAudio 数字静音检测', () {
+    test('全 0 数据与空数据判定为静音', () {
+      expect(isSilentAudio(Uint8List(0)), isTrue);
+      expect(isSilentAudio(Uint8List(32000)), isTrue);
+    });
+
+    test('极低底噪（振幅 < 100）判定为静音', () {
+      final bytes = Uint8List(3200);
+      final view = ByteData.sublistView(bytes);
+      for (var i = 0; i < 1600; i++) {
+        view.setInt16(i * 2, (i % 20) - 10, Endian.little);
+      }
+      expect(isSilentAudio(bytes), isTrue);
+    });
+
+    test('正常人声振幅判定为非静音', () {
+      final bytes = Uint8List(3200);
+      final view = ByteData.sublistView(bytes);
+      for (var i = 0; i < 1600; i++) {
+        view.setInt16(i * 2, (i % 4 == 0) ? 2000 : -2000, Endian.little);
+      }
+      expect(isSilentAudio(bytes), isFalse);
     });
   });
 }
