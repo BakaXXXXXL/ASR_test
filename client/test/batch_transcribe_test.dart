@@ -347,6 +347,8 @@ void main() {
       expect(manager.completedCount, 2);
       expect(manager.tasks[0].status, TaskStatus.completed);
       expect(manager.tasks[1].status, TaskStatus.completed);
+      expect(task1Requests, greaterThan(1));
+      expect(task2Requests, greaterThanOrEqualTo(1));
 
       manager.dispose();
     });
