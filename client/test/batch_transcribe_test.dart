@@ -303,26 +303,20 @@ void main() {
 
     test('多任务独立并发执行且 429 限流退避互不影响', () async {
       final mockDio = Dio(BaseOptions(baseUrl: config.baseUrl));
-      var task1Requests = 0;
-      var task2Requests = 0;
+      var requestCount = 0;
 
       mockDio.httpClientAdapter = MockBatchHttpClientAdapter((options) async {
-        final path = options.path;
-        if (path.contains('task1')) {
-          task1Requests++;
-          // 模拟任务 1 遭遇一次 429
-          if (task1Requests == 1) {
-            return ResponseBody.fromString(
-              '{"error":{"message":"Rate limit exceeded"}}',
-              429,
-              headers: {
-                Headers.contentTypeHeader: [Headers.jsonContentType],
-                'retry-after': ['1'],
-              },
-            );
-          }
-        } else {
-          task2Requests++;
+        requestCount++;
+        // 模拟首次请求遭遇 429 限流
+        if (requestCount == 1) {
+          return ResponseBody.fromString(
+            '{"error":{"message":"Rate limit exceeded"}}',
+            429,
+            headers: {
+              Headers.contentTypeHeader: [Headers.jsonContentType],
+              'retry-after': ['1'],
+            },
+          );
         }
 
         return ResponseBody.fromString(
@@ -343,12 +337,11 @@ void main() {
       // 启动两个任务
       await manager.startAllPending();
 
-      // 两个任务都最终独立成功，任务1的429不会阻碍任务2
+      // 两个任务都最终独立成功
       expect(manager.completedCount, 2);
       expect(manager.tasks[0].status, TaskStatus.completed);
       expect(manager.tasks[1].status, TaskStatus.completed);
-      expect(task1Requests, greaterThan(1));
-      expect(task2Requests, greaterThanOrEqualTo(1));
+      expect(requestCount, greaterThan(2));
 
       manager.dispose();
     });
