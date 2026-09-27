@@ -410,7 +410,7 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  '正在转写 $running 个任务 (全局受控并发: ${widget.config.concurrency})',
+                  '正在转写 $running 个任务 (每任务独立最高 ${widget.config.concurrency} 路并发)',
                   style: TextStyle(fontSize: 11, color: theme.accentColor),
                 ),
               ],

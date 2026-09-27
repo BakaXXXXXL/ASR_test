@@ -265,7 +265,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                       children: [
                         const Icon(Icons.speed, size: 20),
                         const SizedBox(width: 8),
-                        Text('全局并发度: $concurrency 路'),
+                        Text('单任务分段并发: $concurrency 路'),
                       ],
                     ),
                     Slider(
@@ -277,6 +277,13 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                       onChanged: (val) {
                         setDialogState(() => concurrency = val.round());
                       },
+                    ),
+                    Text(
+                      '每个任务独立享有此并发上限，多文件同时转写互不挤占 (最高 16 路)',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(ctx).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -450,7 +457,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
               const Spacer(),
               if (running > 0)
                 Text(
-                  '正在转写 $running 个任务 (并发 ${widget.config.concurrency})',
+                  '正在转写 $running 个任务 (每任务独立 ${widget.config.concurrency} 并发)',
                   style: TextStyle(fontSize: 11, color: theme.colorScheme.primary),
                 ),
             ],

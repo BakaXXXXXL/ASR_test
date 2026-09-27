@@ -123,7 +123,7 @@ Future<void> showFluentSettingsDialog(
                 ),
                 const SizedBox(height: 14),
                 InfoLabel(
-                  label: '分段转写并发数 ($concurrency 路)',
+                  label: '单任务分段并发数 ($concurrency 路)',
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -135,7 +135,7 @@ Future<void> showFluentSettingsDialog(
                             setDialogState(() => concurrency = val.round()),
                       ),
                       Text(
-                        '推荐 4~8 路并发；过高易触发 API 429 限流',
+                        '每个任务独立享有此并发上限，多文件同时转写互不挤占 (最高 16 路)',
                         style: TextStyle(
                           fontSize: 11,
                           color: FluentTheme.of(ctx)

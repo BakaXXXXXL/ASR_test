@@ -88,7 +88,7 @@
 | `config.dart` | 配置管理（API Key）、shared_preferences 持久化 |
 | `models/transcribe_task.dart` | 任务实体与生命周期状态模型（idle / transcribing / completed / failed / cancelled 等） |
 | `services/async_semaphore.dart` | 异步信号量：实现全局受控并发池调度，防止多文件并发时 429 限流雪崩 |
-| `services/batch_transcribe_manager.dart` | 批量任务流调度管理器：统一管理任务队列、全局进度计算、批量开始/取消与容灾重试 |
+| `services/batch_transcribe_manager.dart` | 批量任务流调度管理器：统一管理任务队列、全局进度计算、批量开始/取消、各任务独立最高 16 路并发 Worker 调度与 429 退避隔离 |
 | `services/batch_export_helper.dart` | 结果导出服务：支持按文件名分别导出同名 `.txt` 或一键合并导出 |
 | `audio_format.dart` | 纯 Dart 策略层：文件头嗅探格式、MIME 映射、Base64 体积上限、分段计划/WAV 头构造与解析、文本合并、错误文案 |
 | `audio_converter.dart` | 音频 → 16kHz 单声道 WAV 本地转码、时长预检、临时文件清理 |
@@ -102,6 +102,6 @@
 - **文件格式限制**：仅允许选择 wav/mp3/m4a，并以文件头魔数为准判定真实格式，无法识别的文件不会发起请求
 - **文件大小限制**：单次上传按 Base64 编码后 ≤ 10MB 校验（原始字节 ≤ 7,864,320 B）；超限长录音走分段路径
 - **时长限制**：分段转写前按音频时长预检，超过 2 小时直接报错、不会解码；分段计划再兜底 ≤125 段
-- **并发限制**：分段请求以 16 个 worker 并行，429/5xx/超时退避重试，避免瞬时压垮服务端
+- **并发限制**：单任务分段请求最高支持 16 个 worker 并行，多个任务同时转写时各自独立享有该并发上限，互不抢占；429 限流退避在任务间相互隔离，避免单任务限流波及全局任务并发执行
 - **临时文件**：转码产物写入系统临时目录，请求结束（含异常）后立即删除
 - **传输安全**：全程 HTTPS，API Key 通过 Authorization Header 传递

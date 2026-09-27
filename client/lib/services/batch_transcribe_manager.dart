@@ -6,18 +6,15 @@ import 'package:flutter/foundation.dart';
 import '../config.dart';
 import '../models/transcribe_task.dart';
 import 'asr_service.dart';
-import 'async_semaphore.dart';
 import 'audio_format.dart';
 import 'audio_segment_transcriber.dart';
 
 /// 批量转写任务调度管理器
 ///
-/// 统一管理多音频文件的生命周期、状态流转与全局受控并发调度。
+/// 统一管理多音频文件的生命周期、状态流转与单任务独立并发调度。
 class BatchTranscribeManager extends ChangeNotifier {
   final AppConfig config;
   final Dio? _customDio;
-  late AsyncSemaphore _semaphore;
-  final RateLimitCoordinator _rateLimiter = RateLimitCoordinator();
   late AsrService _asrService;
 
   final List<TranscribeTask> _tasks = [];
@@ -29,16 +26,17 @@ class BatchTranscribeManager extends ChangeNotifier {
     AsrService? asrService,
     Dio? dio,
   }) : _customDio = dio ?? asrService?.dio {
-    _semaphore = AsyncSemaphore(config.concurrency);
     _asrService = asrService ?? _createService();
   }
 
+  /// 为任务创建独立的 AsrService 实例
+  ///
+  /// 每个任务拥有专属独立的限流协调器与并发 Worker，多任务同时转写时互不挤占最高 16 路并发额度。
   AsrService _createService() {
     return AsrService(
       config,
       dio: _customDio,
-      semaphore: _semaphore,
-      sharedRateLimiter: _rateLimiter,
+      sharedRateLimiter: RateLimitCoordinator(),
     );
   }
 
@@ -71,7 +69,6 @@ class BatchTranscribeManager extends ChangeNotifier {
 
   /// 动态更新配置（例如在设置中修改了并发数或 API Key）
   void updateConfig() {
-    _semaphore = AsyncSemaphore(config.concurrency);
     _asrService.dispose();
     _asrService = _createService();
     notifyListeners();

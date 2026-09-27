@@ -300,5 +300,55 @@ void main() {
 
       manager.dispose();
     });
+
+    test('多任务独立并发执行且 429 限流退避互不影响', () async {
+      final mockDio = Dio(BaseOptions(baseUrl: config.baseUrl));
+      var task1Requests = 0;
+      var task2Requests = 0;
+
+      mockDio.httpClientAdapter = MockBatchHttpClientAdapter((options) async {
+        final path = options.path;
+        if (path.contains('task1')) {
+          task1Requests++;
+          // 模拟任务 1 遭遇一次 429
+          if (task1Requests == 1) {
+            return ResponseBody.fromString(
+              '{"error":{"message":"Rate limit exceeded"}}',
+              429,
+              headers: {
+                Headers.contentTypeHeader: [Headers.jsonContentType],
+                'retry-after': ['1'],
+              },
+            );
+          }
+        } else {
+          task2Requests++;
+        }
+
+        return ResponseBody.fromString(
+          '{"choices":[{"message":{"content":"独立转写完成"}}]}',
+          200,
+          headers: {Headers.contentTypeHeader: [Headers.jsonContentType]},
+        );
+      });
+
+      final asrService = AsrService(config, dio: mockDio);
+      final manager =
+          BatchTranscribeManager(config: config, asrService: asrService);
+
+      final f1 = await _createMockWavFile('task1_audio');
+      final f2 = await _createMockWavFile('task2_audio');
+      await manager.addFiles([f1, f2]);
+
+      // 启动两个任务
+      await manager.startAllPending();
+
+      // 两个任务都最终独立成功，任务1的429不会阻碍任务2
+      expect(manager.completedCount, 2);
+      expect(manager.tasks[0].status, TaskStatus.completed);
+      expect(manager.tasks[1].status, TaskStatus.completed);
+
+      manager.dispose();
+    });
   });
 }
