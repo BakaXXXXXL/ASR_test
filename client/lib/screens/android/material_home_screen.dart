@@ -1,14 +1,14 @@
-import 'dart:convert';
 import 'dart:io';
 
-import 'package:dio/dio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../config.dart';
-import '../../services/asr_service.dart';
+import '../../models/transcribe_task.dart';
 import '../../services/audio_format.dart';
+import '../../services/batch_export_helper.dart';
+import '../../services/batch_transcribe_manager.dart';
 
 class MaterialHomeScreen extends StatefulWidget {
   final AppConfig config;
@@ -20,258 +20,127 @@ class MaterialHomeScreen extends StatefulWidget {
 }
 
 class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
-  File? _selectedFile;
-  String _fileName = '';
-  int _fileSize = 0;
-  String _language = 'auto';
-  String _result = '';
-  bool _loading = false;
-  bool _retrying = false;
-  String? _error;
-  AudioFormat? _format;
-  AudioStage? _stage;
-  String? _statusMessage;
-  int _segDone = 0;
-  int _segTotal = 0;
-  TranscribeResult? _lastResult;
-
-  String get _stageLabel {
-    if (_retrying) {
-      return _statusMessage ??
-          (_segTotal > 0
-              ? '正在补转失败分段 $_segDone/$_segTotal 段...'
-              : '正在补转失败分段...');
-    }
-    if (!_loading) return '开始识别';
-    if (_statusMessage != null) return _statusMessage!;
-    return switch (_stage) {
-      AudioStage.converting => '正在转换音频...',
-      AudioStage.segmentTranscribing => _segTotal > 0
-          ? '正在转写 $_segDone/$_segTotal 段...'
-          : '正在分段转写...',
-      _ => '正在识别...',
-    };
-  }
-  late AsrService _asr;
+  late final BatchTranscribeManager _manager;
 
   @override
   void initState() {
     super.initState();
-    _asr = AsrService(widget.config);
+    _manager = BatchTranscribeManager(config: widget.config);
+    _manager.addListener(_onManagerUpdate);
+  }
+
+  void _onManagerUpdate() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    _asr.dispose();
+    _manager.removeListener(_onManagerUpdate);
+    _manager.dispose();
     super.dispose();
   }
 
-  Future<void> _pickFile() async {
+  Future<void> _pickFiles() async {
     final result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: pickedExtensions,
+      allowMultiple: true,
     );
-    if (result == null || result.files.single.path == null) return;
+    if (result == null || result.files.isEmpty) return;
 
-    final file = File(result.files.single.path!);
-    final format = await _detectFormat(file);
-    if (!mounted) return;
-
-    setState(() {
-      _selectedFile = file;
-      _fileName = result.files.single.name;
-      _fileSize = result.files.single.size;
-      _format = format;
-      _error = format == null ? unsupportedFormatMessage : null;
-      _result = '';
-      _stage = null;
-    });
-  }
-
-  /// 只读文件头识别真实格式（扩展名不可信）。
-  Future<AudioFormat?> _detectFormat(File file) async {
-    final raf = await file.open();
-    try {
-      final length = await raf.length();
-      final head = await raf.read(length < 12 ? length : 12);
-      return detectAudioFormat(head);
-    } catch (_) {
-      return null;
-    } finally {
-      await raf.close();
+    final files = <File>[];
+    for (final f in result.files) {
+      if (f.path != null) {
+        files.add(File(f.path!));
+      }
+    }
+    if (files.isNotEmpty) {
+      await _manager.addFiles(files);
     }
   }
 
-  Future<void> _transcribe() async {
-    if (_selectedFile == null) return;
+  void _copyTaskText(TranscribeTask task) {
+    if (task.resultText.isEmpty) return;
+    Clipboard.setData(ClipboardData(text: task.resultText));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('已复制 "${task.fileName}" 的识别结果'),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      ),
+    );
+  }
 
-    setState(() {
-      _loading = true;
-      _retrying = false;
-      _error = null;
-      _result = '';
-      _lastResult = null;
-      _stage = null;
-      _statusMessage = null;
-      _segDone = 0;
-      _segTotal = 0;
-    });
-
+  Future<void> _exportSingle(TranscribeTask task) async {
     try {
-      final res = await _asr.transcribe(
-        _selectedFile!,
-        language: _language,
-        onStage: (stage) {
-          if (mounted) setState(() => _stage = stage);
-        },
-        onProgress: (done, total) {
-          if (mounted && (done != _segDone || total != _segTotal)) {
-            setState(() {
-              _segDone = done;
-              _segTotal = total;
-            });
-          }
-        },
-        onStatusMessage: (msg) {
-          if (mounted) setState(() => _statusMessage = msg);
-        },
-      );
-      if (mounted) {
-        setState(() {
-          _result = res.text;
-          _lastResult = res;
-          _loading = false;
-          _stage = null;
-          _statusMessage = null;
-        });
-      }
-    } on DioException catch (e) {
-      if (mounted) {
-        String msg;
-        try {
-          msg = e.response?.data?['error']?['message']?.toString() ??
-              e.response?.data?['detail']?.toString() ??
-              e.message ??
-              '请求失败';
-        } catch (_) {
-          msg = e.message ?? '请求失败';
-        }
-        setState(() {
-          _error = msg;
-          _loading = false;
-          _stage = null;
-        });
+      final file = await BatchExportHelper.exportSingleTask(task);
+      if (file != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已保存至: ${file.path}'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _error = e.toString();
-          _loading = false;
-          _stage = null;
-        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('导出失败: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
       }
     }
   }
 
-  Future<void> _retryFailedSegments() async {
-    if (_retrying || _loading || _lastResult == null || !_lastResult!.isPartial) {
-      return;
-    }
-
-    setState(() {
-      _retrying = true;
-      _error = null;
-      _statusMessage = '正在自动补转失败分段...';
-      _segDone = 0;
-      _segTotal = _lastResult!.failedIndices.length;
-    });
-
+  Future<void> _batchExportFiles() async {
     try {
-      final res = await _asr.retryFailedSegments(
-        onProgress: (done, total) {
-          if (mounted) {
-            setState(() {
-              _segDone = done;
-              _segTotal = total;
-            });
-          }
-        },
-        onStatusMessage: (msg) {
-          if (mounted) setState(() => _statusMessage = msg);
-        },
-      );
-
-      if (mounted) {
-        setState(() {
-          _result = res.text;
-          _lastResult = res;
-          _retrying = false;
-          _statusMessage = null;
-        });
-
-        if (!res.isPartial) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('所有失败分段已成功补转完成'),
-              backgroundColor: Colors.green.shade700,
-              behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8)),
-            ),
-          );
-        }
+      final res = await BatchExportHelper.exportCompletedToDirectory(_manager.tasks);
+      if (res != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已批量导出 ${res.count} 个文件至: ${res.directory}'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
-        setState(() {
-          _error = '补转失败: $e';
-          _retrying = false;
-          _statusMessage = null;
-        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('批量导出失败: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
       }
     }
   }
 
-  void _copyResult() {
-    if (_result.isNotEmpty) {
-      Clipboard.setData(ClipboardData(text: _result));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text('已复制到剪贴板'),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-      );
+  Future<void> _batchExportMerged() async {
+    try {
+      final file = await BatchExportHelper.exportMergedToSingleFile(_manager.tasks);
+      if (file != null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('已保存汇总至: ${file.path}'),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('合并导出失败: $e'),
+            backgroundColor: Theme.of(context).colorScheme.error,
+          ),
+        );
+      }
     }
-  }
-
-  Future<void> _exportTxt() async {
-    if (_result.isEmpty) return;
-    final savedPath = await FilePicker.platform.saveFile(
-      dialogTitle: '导出识别结果为 TXT',
-      fileName: _exportFileName(),
-      bytes: utf8.encode(_result),
-    );
-    if (!mounted) return;
-    if (savedPath != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('已导出到 $savedPath'),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-        ),
-      );
-    }
-  }
-
-  String _exportFileName() {
-    final dot = _fileName.lastIndexOf('.');
-    final base = dot > 0 ? _fileName.substring(0, dot) : 'transcript';
-    final now = DateTime.now();
-    String two(int v) => v.toString().padLeft(2, '0');
-    final ts = '${now.year}${two(now.month)}${two(now.day)}'
-        '_${two(now.hour)}${two(now.minute)}${two(now.second)}';
-    return '${base}_$ts.txt';
   }
 
   void _showSettings() {
@@ -297,7 +166,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
               children: [
                 Icon(Icons.tune, size: 22),
                 SizedBox(width: 8),
-                Text('ASR 服务商与 API 设置'),
+                Text('ASR 服务商与设置'),
               ],
             ),
             content: SizedBox(
@@ -342,8 +211,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                       items: const [
                         DropdownMenuItem(
                           value: AsrProtocol.audioTranscriptions,
-                          child: Text(
-                              'OpenAI Whisper 规范 (/audio/transcriptions)'),
+                          child: Text('OpenAI Whisper 规范 (/audio/transcriptions)'),
                         ),
                         DropdownMenuItem(
                           value: AsrProtocol.chatCompletions,
@@ -370,76 +238,46 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                       controller: modelCtrl,
                       decoration: const InputDecoration(
                         labelText: '模型名称 (Model)',
-                        hintText: '例如: whisper-1 或 SenseVoiceSmall',
+                        hintText: '如 mimo-v2.5-asr',
                         prefixIcon: Icon(Icons.model_training, size: 20),
                       ),
                     ),
                     const SizedBox(height: 14),
                     TextField(
                       controller: keyCtrl,
+                      obscureText: obscure,
                       decoration: InputDecoration(
                         labelText: 'API Key',
                         hintText: currentPreset.apiKeyHint,
                         prefixIcon: const Icon(Icons.key, size: 20),
                         suffixIcon: IconButton(
-                          icon: Icon(obscure
-                              ? Icons.visibility_off
-                              : Icons.visibility),
+                          icon: Icon(
+                            obscure ? Icons.visibility_off : Icons.visibility,
+                            size: 20,
+                          ),
                           onPressed: () =>
                               setDialogState(() => obscure = !obscure),
                         ),
                       ),
-                      obscureText: obscure,
                     ),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 14),
                     Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          '分段并发数',
-                          style:
-                              Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                        ),
-                        Text(
-                          '$concurrency 路',
-                          style: TextStyle(
-                            color: Theme.of(context).colorScheme.primary,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                        const Icon(Icons.speed, size: 20),
+                        const SizedBox(width: 8),
+                        Text('全局并发度: $concurrency 路'),
                       ],
                     ),
                     Slider(
                       value: concurrency.toDouble(),
-                      min: 1,
-                      max: 16,
-                      divisions: 15,
-                      label: '$concurrency',
+                      min: AppConfig.minConcurrency.toDouble(),
+                      max: AppConfig.maxConcurrency.toDouble(),
+                      divisions: AppConfig.maxConcurrency - AppConfig.minConcurrency,
+                      label: '$concurrency 路',
                       onChanged: (val) {
                         setDialogState(() => concurrency = val.round());
                       },
                     ),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Text(
-                        '推荐 4~8 路并发；过高易触发 API 429 限流',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Colors.grey,
-                              fontSize: 11,
-                            ),
-                      ),
-                    ),
-                    if (currentPreset.portalUrl != null) ...[
-                      const SizedBox(height: 12),
-                      Text(
-                        '官网控制台: ${currentPreset.portalUrl}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: Colors.grey,
-                            ),
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -459,8 +297,7 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
                     apiKey: keyCtrl.text.trim(),
                     concurrency: concurrency,
                   );
-                  _asr.dispose();
-                  _asr = AsrService(widget.config);
+                  _manager.updateConfig();
                   if (ctx.mounted) Navigator.pop(ctx);
                   setState(() {});
                 },
@@ -473,430 +310,348 @@ class _MaterialHomeScreenState extends State<MaterialHomeScreen> {
     );
   }
 
-  String _formatSize(int bytes) {
-    if (bytes < 1024) return '$bytes B';
-    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    final isReady = widget.config.isConfigured;
+    final theme = Theme.of(context);
+    final isProcessing = _manager.isProcessing;
+    final canStart = _manager.tasks.any((t) =>
+        t.status == TaskStatus.idle ||
+        t.status == TaskStatus.failed ||
+        t.status == TaskStatus.cancelled);
+    final hasCompleted = _manager.completedCount > 0;
 
     return Scaffold(
-      body: Column(
-        children: [
-          // Top bar
-          Container(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
-            decoration: BoxDecoration(
-              color: cs.surface,
-              border: Border(
-                bottom:
-                    BorderSide(color: cs.outlineVariant.withValues(alpha: 0.5)),
+      appBar: AppBar(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('ASR 语音转文字', style: TextStyle(fontSize: 18)),
+            Text(
+              widget.config.badgeText,
+              style: TextStyle(
+                fontSize: 11,
+                color: theme.colorScheme.primary,
+                fontWeight: FontWeight.w500,
               ),
             ),
-            child: SafeArea(
-              bottom: false,
-              child: Row(
-                children: [
-                  Icon(Icons.mic, color: cs.primary, size: 24),
-                  const SizedBox(width: 10),
-                  Text(
-                    'ASR 语音转文字',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                  ),
-                  const SizedBox(width: 8),
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: cs.primaryContainer,
-                      borderRadius: BorderRadius.circular(6),
-                    ),
-                    child: Text(
-                      widget.config.badgeText,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        color: cs.onPrimaryContainer,
-                      ),
-                    ),
-                  ),
-                  const Spacer(),
-                  // API Key indicator
-                  Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                    decoration: BoxDecoration(
-                      color: isReady
-                          ? Colors.green.withValues(alpha: 0.1)
-                          : cs.errorContainer,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isReady
-                              ? Icons.check_circle_outline
-                              : Icons.warning_amber,
-                          size: 14,
-                          color: isReady ? Colors.green.shade700 : cs.error,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          isReady ? '已就绪' : '未配置服务',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w500,
-                            color: isReady ? Colors.green.shade700 : cs.error,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  IconButton(
-                    icon: const Icon(Icons.settings, size: 20),
-                    onPressed: _showSettings,
-                    tooltip: 'API 设置',
-                    style: IconButton.styleFrom(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-
-          // Main content
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 560),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+          ],
+        ),
+        actions: [
+          if (hasCompleted)
+            PopupMenuButton<String>(
+              icon: const Icon(Icons.download),
+              tooltip: '批量导出',
+              onSelected: (val) {
+                if (val == 'separate') {
+                  _batchExportFiles();
+                } else if (val == 'merged') {
+                  _batchExportMerged();
+                }
+              },
+              itemBuilder: (ctx) => [
+                const PopupMenuItem(
+                  value: 'separate',
+                  child: Row(
                     children: [
-                      // File picker area
-                      InkWell(
-                        onTap: _loading ? null : _pickFile,
-                        borderRadius: BorderRadius.circular(12),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 36, horizontal: 20),
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: _selectedFile != null
-                                  ? cs.primary.withValues(alpha: 0.4)
-                                  : cs.outlineVariant,
-                              width: _selectedFile != null ? 2 : 1,
-                            ),
-                            color: _selectedFile != null
-                                ? cs.primaryContainer.withValues(alpha: 0.15)
-                                : cs.surfaceContainerLowest,
-                          ),
-                          child: Column(
-                            children: [
-                              if (_selectedFile == null) ...[
-                                Icon(Icons.cloud_upload_outlined,
-                                    size: 48,
-                                    color: cs.onSurfaceVariant
-                                        .withValues(alpha: 0.5)),
-                                const SizedBox(height: 12),
-                                Text(
-                                  '点击或拖放音频文件',
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    color: cs.onSurfaceVariant,
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  '支持 WAV / MP3 / M4A 格式',
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    color: cs.onSurfaceVariant
-                                        .withValues(alpha: 0.6),
-                                  ),
-                                ),
-                              ] else ...[
-                                Icon(Icons.audio_file,
-                                    size: 40, color: cs.primary),
-                                const SizedBox(height: 12),
-                                Text(
-                                  _fileName,
-                                  style: TextStyle(
-                                    fontSize: 15,
-                                    fontWeight: FontWeight.w600,
-                                    color: cs.onSurface,
-                                  ),
-                                  textAlign: TextAlign.center,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _formatSize(_fileSize),
-                                  style: TextStyle(
-                                    fontSize: 13,
-                                    color: cs.onSurfaceVariant,
-                                  ),
-                                ),
-                                if (_format == AudioFormat.m4a) ...[
-                                  const SizedBox(height: 6),
-                                  Text(
-                                    '将自动转换为 WAV（${wavSampleRate ~/ 1000}kHz 单声道），'
-                                    '超长录音按 $segmentSeconds 秒分段并行转写，最长 2 小时',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: cs.onSurfaceVariant
-                                          .withValues(alpha: 0.75),
-                                    ),
-                                    textAlign: TextAlign.center,
-                                  ),
-                                ],
-                                const SizedBox(height: 8),
-                                TextButton.icon(
-                                  onPressed: _loading ? null : _pickFile,
-                                  icon: const Icon(Icons.swap_horiz, size: 16),
-                                  label: const Text('更换文件'),
-                                  style: TextButton.styleFrom(
-                                    visualDensity: VisualDensity.compact,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 20),
-
-                      // Language selector
-                      DropdownButtonFormField<String>(
-                        initialValue: _language,
-                        decoration: const InputDecoration(
-                          labelText: '识别语言',
-                          prefixIcon: Icon(Icons.translate, size: 20),
-                        ),
-                        borderRadius: BorderRadius.circular(10),
-                        items: const [
-                          DropdownMenuItem(value: 'auto', child: Text('自动检测')),
-                          DropdownMenuItem(value: 'zh', child: Text('中文')),
-                          DropdownMenuItem(value: 'en', child: Text('English')),
-                        ],
-                        onChanged: _loading
-                            ? null
-                            : (v) => setState(() => _language = v ?? 'auto'),
-                      ),
-                      const SizedBox(height: 24),
-
-                      // Transcribe button
-                      SizedBox(
-                        height: 48,
-                        child: FilledButton.icon(
-                          onPressed: (_selectedFile != null &&
-                                  !_loading &&
-                                  isReady &&
-                                  _format != null)
-                              ? _transcribe
-                              : null,
-                          icon: _loading
-                              ? const SizedBox(
-                                  width: 20,
-                                  height: 20,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.auto_awesome, size: 20),
-                          label: Text(
-                            _stageLabel,
-                            style: const TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.w500),
-                          ),
-                        ),
-                      ),
-                      // Linear Progress Bar during segmentation or retry
-                      if ((_loading || _retrying) && _segTotal > 0) ...[
-                        const SizedBox(height: 12),
-                        LinearProgressIndicator(
-                          value: _segDone / _segTotal,
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                      ],
-
-                      // Error
-                      if (_error != null) ...[
-                        const SizedBox(height: 20),
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: cs.errorContainer,
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Row(
-                            children: [
-                              Icon(Icons.error_outline,
-                                  color: cs.error, size: 20),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  _error!,
-                                  style: TextStyle(
-                                    color: cs.onErrorContainer,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-
-                      // Partial Success Banner
-                      if (_lastResult != null &&
-                          _lastResult!.isPartial &&
-                          !_loading) ...[
-                        const SizedBox(height: 16),
-                        Container(
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                            color: Colors.amber.shade50,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.amber.shade300),
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.warning_amber_rounded,
-                                      color: Colors.amber.shade900, size: 20),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      '转写完成（${_lastResult!.successCount}/${_lastResult!.totalSegments} 段成功）',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 14,
-                                        color: Colors.amber.shade900,
-                                      ),
-                                    ),
-                                  ),
-                                  if (_retrying)
-                                    const SizedBox(
-                                      width: 18,
-                                      height: 18,
-                                      child: CircularProgressIndicator(
-                                          strokeWidth: 2),
-                                    )
-                                  else
-                                    FilledButton.tonal(
-                                      onPressed: _retryFailedSegments,
-                                      style: FilledButton.styleFrom(
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                      child: const Text('重试失败段'),
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 6),
-                              Text(
-                                '第 ${_lastResult!.failedSegmentsDisplay} 段未转写成功，已为您保留全部成功内容。您可以点击右侧按钮重试失败段落。',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.amber.shade900,
-                                  height: 1.4,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                      // Result
-                      if (_result.isNotEmpty) ...[
-                        const SizedBox(height: 20),
-                        Container(
-                          decoration: BoxDecoration(
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: cs.outlineVariant),
-                            color: cs.surfaceContainerLowest,
-                          ),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Padding(
-                                padding:
-                                    const EdgeInsets.fromLTRB(16, 12, 8, 8),
-                                child: Row(
-                                  children: [
-                                    Icon(Icons.text_snippet_outlined,
-                                        size: 18, color: cs.primary),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      '识别结果',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 14,
-                                        color: cs.onSurface,
-                                      ),
-                                    ),
-                                    const Spacer(),
-                                    IconButton(
-                                      icon: const Icon(Icons.copy_rounded,
-                                          size: 18),
-                                      onPressed: _copyResult,
-                                      tooltip: '复制',
-                                      style: IconButton.styleFrom(
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon:
-                                          const Icon(Icons.download, size: 18),
-                                      onPressed: _exportTxt,
-                                      tooltip: '导出为 TXT',
-                                      style: IconButton.styleFrom(
-                                        visualDensity: VisualDensity.compact,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Divider(height: 1, color: cs.outlineVariant),
-                              Padding(
-                                padding: const EdgeInsets.all(16),
-                                child: SelectableText(
-                                  _result,
-                                  style: const TextStyle(
-                                    fontSize: 15,
-                                    height: 1.6,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-
-                      const SizedBox(height: 24),
+                      Icon(Icons.folder_outlined, size: 18),
+                      SizedBox(width: 8),
+                      Text('分别导出各文件 .txt'),
                     ],
                   ),
                 ),
-              ),
+                const PopupMenuItem(
+                  value: 'merged',
+                  child: Row(
+                    children: [
+                      Icon(Icons.description_outlined, size: 18),
+                      SizedBox(width: 8),
+                      Text('合并为单个总 .txt'),
+                    ],
+                  ),
+                ),
+              ],
             ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: '设置',
+            onPressed: _showSettings,
           ),
         ],
       ),
+      body: Column(
+        children: [
+          if (_manager.tasks.isNotEmpty) _buildProgressBar(theme),
+          Expanded(
+            child: _manager.tasks.isEmpty
+                ? _buildEmptyView(theme)
+                : _buildTaskList(theme),
+          ),
+        ],
+      ),
+      bottomNavigationBar: _manager.tasks.isNotEmpty
+          ? BottomAppBar(
+              child: Row(
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: _pickFiles,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('添加'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilledButton.icon(
+                    onPressed: canStart ? () => _manager.startAllPending() : null,
+                    icon: const Icon(Icons.play_arrow, size: 18),
+                    label: const Text('全部开始'),
+                  ),
+                  const Spacer(),
+                  if (isProcessing)
+                    IconButton.filledTonal(
+                      icon: const Icon(Icons.stop),
+                      tooltip: '全部停止',
+                      onPressed: () => _manager.cancelAll(),
+                    )
+                  else if (hasCompleted)
+                    IconButton(
+                      icon: const Icon(Icons.cleaning_services_outlined),
+                      tooltip: '清空已完成',
+                      onPressed: () => _manager.clearCompleted(),
+                    ),
+                ],
+              ),
+            )
+          : null,
+      floatingActionButton: _manager.tasks.isEmpty
+          ? FloatingActionButton.extended(
+              onPressed: _pickFiles,
+              icon: const Icon(Icons.audio_file),
+              label: const Text('添加音频文件'),
+            )
+          : null,
+    );
+  }
+
+  Widget _buildProgressBar(ThemeData theme) {
+    final total = _manager.totalCount;
+    final done = _manager.completedCount;
+    final running = _manager.runningCount;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Text(
+                '总进度: $done / $total 完成',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+              ),
+              const Spacer(),
+              if (running > 0)
+                Text(
+                  '正在转写 $running 个任务 (并发 ${widget.config.concurrency})',
+                  style: TextStyle(fontSize: 11, color: theme.colorScheme.primary),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          LinearProgressIndicator(value: _manager.overallProgress),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyView(ThemeData theme) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.queue_music,
+              size: 72,
+              color: theme.colorScheme.primary.withValues(alpha: 0.5),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '批量转写队列为空',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '点击右下角按钮添加一个或多个音频文件\n支持 WAV / MP3 / M4A 格式，最长 2 小时',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 13,
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTaskList(ThemeData theme) {
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: _manager.tasks.length,
+      itemBuilder: (ctx, index) {
+        final task = _manager.tasks[index];
+        final isRunning = task.status == TaskStatus.converting ||
+            task.status == TaskStatus.transcribing ||
+            task.status == TaskStatus.retrying;
+        final isCompleted = task.status == TaskStatus.completed;
+        final isFailed = task.status == TaskStatus.failed;
+        final hasPartial = task.lastResult?.isPartial ?? false;
+
+        return Card(
+          margin: const EdgeInsets.only(bottom: 10),
+          clipBehavior: Clip.antiAlias,
+          child: ExpansionTile(
+            key: Key(task.id),
+            initiallyExpanded: task.isExpanded,
+            onExpansionChanged: (expanded) {
+              task.isExpanded = expanded;
+            },
+            leading: CircleAvatar(
+              backgroundColor: theme.colorScheme.primaryContainer,
+              child: Text(
+                task.format?.name.toUpperCase() ?? '?',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: theme.colorScheme.onPrimaryContainer,
+                ),
+              ),
+            ),
+            title: Text(
+              task.fileName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+            ),
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 2),
+                Text(
+                  '${task.formattedSize} • ${task.statusDisplay}',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isFailed
+                        ? theme.colorScheme.error
+                        : (isRunning
+                            ? theme.colorScheme.primary
+                            : (isCompleted
+                                ? Colors.green
+                                : theme.colorScheme.onSurfaceVariant)),
+                  ),
+                ),
+                if (isRunning) ...[
+                  const SizedBox(height: 6),
+                  LinearProgressIndicator(value: task.progress),
+                ],
+              ],
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (isRunning)
+                  IconButton(
+                    icon: const Icon(Icons.stop),
+                    onPressed: () => _manager.cancelTask(task.id),
+                  )
+                else if (isFailed || task.status == TaskStatus.idle || task.status == TaskStatus.cancelled)
+                  IconButton(
+                    icon: const Icon(Icons.play_arrow),
+                    onPressed: () => _manager.startTask(task.id),
+                  ),
+                if (isCompleted && hasPartial)
+                  IconButton(
+                    icon: const Icon(Icons.refresh),
+                    tooltip: '重试失败分段',
+                    onPressed: () => _manager.retryFailedSegments(task.id),
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.close, size: 18),
+                  onPressed: () => _manager.removeTask(task.id),
+                ),
+              ],
+            ),
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (task.errorMessage != null) ...[
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.errorContainer,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          task.errorMessage!,
+                          style: TextStyle(
+                            color: theme.colorScheme.onErrorContainer,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    if (task.resultText.isNotEmpty) ...[
+                      Row(
+                        children: [
+                          Text(
+                            '识别结果 (${task.resultText.length} 字)',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                          ),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: () => _copyTaskText(task),
+                            icon: const Icon(Icons.copy, size: 16),
+                            label: const Text('复制'),
+                          ),
+                          TextButton.icon(
+                            onPressed: () => _exportSingle(task),
+                            icon: const Icon(Icons.save_alt, size: 16),
+                            label: const Text('导出'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        constraints: const BoxConstraints(maxHeight: 180),
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: SingleChildScrollView(
+                          child: SelectableText(
+                            task.resultText,
+                            style: const TextStyle(fontSize: 13, height: 1.5),
+                          ),
+                        ),
+                      ),
+                    ] else if (!isFailed) ...[
+                      const Text(
+                        '暂无转写结果',
+                        style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

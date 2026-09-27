@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 
 import '../config.dart';
+import 'async_semaphore.dart';
 import 'audio_converter.dart';
 import 'audio_format.dart';
 import 'audio_segment_transcriber.dart';
@@ -106,11 +107,18 @@ class AsrService {
   final AppConfig config;
   final AudioConverter _converter = AudioConverter();
   late final Dio _dio;
+  final AsyncSemaphore? semaphore;
+  final RateLimitCoordinator? sharedRateLimiter;
   TranscribeSession? _activeSession;
 
   TranscribeSession? get activeSession => _activeSession;
 
-  AsrService(this.config, {Dio? dio}) {
+  AsrService(
+    this.config, {
+    Dio? dio,
+    this.semaphore,
+    this.sharedRateLimiter,
+  }) {
     final headers = <String, dynamic>{};
     if (config.apiKey.isNotEmpty) {
       headers['Authorization'] = 'Bearer ${config.apiKey}';
@@ -170,11 +178,26 @@ class AsrService {
     void Function(AudioStage stage)? onStage,
     void Function(int done, int total)? onProgress,
     void Function(String message)? onStatusMessage,
+    CancelToken? cancelToken,
+    AsyncSemaphore? semaphore,
+    RateLimitCoordinator? rateLimitCoordinator,
   }) async {
+    final effectiveSemaphore = semaphore ?? this.semaphore;
+    final effectiveRateLimiter =
+        rateLimitCoordinator ?? sharedRateLimiter;
+
     final fileSize = await file.length();
     final format = await _detectFormat(file);
     if (format == null) {
       throw const AudioInputException(unsupportedFormatMessage);
+    }
+
+    if (cancelToken?.isCancelled ?? false) {
+      throw DioException(
+        requestOptions: RequestOptions(path: ''),
+        type: DioExceptionType.cancel,
+        message: '用户已取消转写任务',
+      );
     }
 
     if (!needsConversion(format) && fitsBase64Limit(fileSize)) {
@@ -182,7 +205,14 @@ class AsrService {
       if (!fitsBase64Limit(bytes.length)) {
         throw AudioInputException(sizeLimitMessage(bytes.length));
       }
-      return _post(bytes, uploadFormatFor(format), language, onStage: onStage);
+      return _post(
+        bytes,
+        uploadFormatFor(format),
+        language,
+        onStage: onStage,
+        cancelToken: cancelToken,
+        semaphore: effectiveSemaphore,
+      );
     }
 
     onStage?.call(AudioStage.converting);
@@ -190,10 +220,25 @@ class AsrService {
         await _converter.toWav(file, maxDuration: maxSegmentedDuration);
     var keepConvertedFile = false;
     try {
+      if (cancelToken?.isCancelled ?? false) {
+        throw DioException(
+          requestOptions: RequestOptions(path: ''),
+          type: DioExceptionType.cancel,
+          message: '用户已取消转写任务',
+        );
+      }
+
       final convertedSize = await converted.length();
       if (fitsBase64Limit(convertedSize)) {
         final bytes = await converted.readAsBytes();
-        return await _post(bytes, AudioFormat.wav, language, onStage: onStage);
+        return await _post(
+          bytes,
+          AudioFormat.wav,
+          language,
+          onStage: onStage,
+          cancelToken: cancelToken,
+          semaphore: effectiveSemaphore,
+        );
       }
 
       onStage?.call(AudioStage.segmentTranscribing);
@@ -205,9 +250,11 @@ class AsrService {
           AudioFormat.wav,
           language,
           cancelToken: token,
+          semaphore: effectiveSemaphore,
         ),
         onProgress: onProgress,
         onStatusMessage: onStatusMessage,
+        rateLimitCoordinator: effectiveRateLimiter,
       );
 
       // 全部失败：不保留现场，抛出异常告知用户根本原因
@@ -267,11 +314,18 @@ class AsrService {
   Future<TranscribeResult> retryFailedSegments({
     void Function(int done, int total)? onProgress,
     void Function(String message)? onStatusMessage,
+    CancelToken? cancelToken,
+    AsyncSemaphore? semaphore,
+    RateLimitCoordinator? rateLimitCoordinator,
   }) async {
     final session = _activeSession;
     if (session == null || session.isAllSuccessful) {
       throw StateError('没有可重试的分段转写会话');
     }
+
+    final effectiveSemaphore = semaphore ?? this.semaphore;
+    final effectiveRateLimiter =
+        rateLimitCoordinator ?? sharedRateLimiter;
 
     final segResult = await transcribeSegmented(
       session.wavFile,
@@ -284,9 +338,11 @@ class AsrService {
         AudioFormat.wav,
         session.language,
         cancelToken: token,
+        semaphore: effectiveSemaphore,
       ),
       onProgress: onProgress,
       onStatusMessage: onStatusMessage,
+      rateLimitCoordinator: effectiveRateLimiter,
     );
 
     session.failedIndices = segResult.failedIndices;
@@ -319,6 +375,32 @@ class AsrService {
   }
 
   Future<TranscribeResult> _post(
+    Uint8List bytes,
+    AudioFormat format,
+    String language, {
+    void Function(AudioStage stage)? onStage,
+    CancelToken? cancelToken,
+    AsyncSemaphore? semaphore,
+  }) async {
+    if (semaphore != null) {
+      return await semaphore.run(() => _doPost(
+            bytes,
+            format,
+            language,
+            onStage: onStage,
+            cancelToken: cancelToken,
+          ));
+    }
+    return await _doPost(
+      bytes,
+      format,
+      language,
+      onStage: onStage,
+      cancelToken: cancelToken,
+    );
+  }
+
+  Future<TranscribeResult> _doPost(
     Uint8List bytes,
     AudioFormat format,
     String language, {

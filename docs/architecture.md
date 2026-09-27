@@ -86,6 +86,10 @@
 | `fluent_home_screen.dart` | Windows 端 WinUI 3 原生体验主界面（导航栏、亚克力卡片、InfoBar、ProgressRing） |
 | `material_home_screen.dart` | Android 移动端 Material 3 主界面 |
 | `config.dart` | 配置管理（API Key）、shared_preferences 持久化 |
+| `models/transcribe_task.dart` | 任务实体与生命周期状态模型（idle / transcribing / completed / failed / cancelled 等） |
+| `services/async_semaphore.dart` | 异步信号量：实现全局受控并发池调度，防止多文件并发时 429 限流雪崩 |
+| `services/batch_transcribe_manager.dart` | 批量任务流调度管理器：统一管理任务队列、全局进度计算、批量开始/取消与容灾重试 |
+| `services/batch_export_helper.dart` | 结果导出服务：支持按文件名分别导出同名 `.txt` 或一键合并导出 |
 | `audio_format.dart` | 纯 Dart 策略层：文件头嗅探格式、MIME 映射、Base64 体积上限、分段计划/WAV 头构造与解析、文本合并、错误文案 |
 | `audio_converter.dart` | 音频 → 16kHz 单声道 WAV 本地转码、时长预检、临时文件清理 |
 | `audio_segment_transcriber.dart` | 长录音分段：基于 VAD 在 50s~65s 停顿切片、16 并发请求、退避重试、失败取消、按序合并 |

@@ -4,13 +4,12 @@
 
 ## 功能特性
 
-- 音频文件导入转文字（支持 wav / mp3 / m4a）
-- 长录音智能分段转写：超长录音自动转成 16kHz 单声道 WAV，基于 VAD 短时能量检测在自然停顿处智能切片（50s~65s），16 路并发并行识别（最长 2 小时）
-- 多语言支持（中文/英文/自动检测）
-- Windows 桌面端 (.exe) + Android 移动端 (APK)
-- Windows 端采用微软 WinUI 3 (Fluent Design) 原生质感界面，Android 端采用 Material Design 3 界面，均支持系统级明暗主题
-- API Key 认证保护
-- 识别结果一键复制或导出为 .txt 文件
+- **多文件批量并发转写（多开队列）**：支持一次性导入复数个音频文件排队或并行识别，卡片式独立展示各文件进度、状态与转写文本
+- **全局受控并发池（Global Semaphore）**：所有任务切片与网络请求共享全局并发上限（1~16 路可调），配合 429 协同限流退避，杜绝高并发封禁
+- **折叠卡片流与双端质感**：Windows 端采用微软 WinUI 3 (Fluent Design) 原生卡片与 Acrylic 质感，Android 端采用 Material Design 3 界面；每个任务支持独立折叠展开、复制、单文件导出或一键批量导出
+- **长录音智能分段转写**：超长录音自动转成 16kHz 单声道 WAV，基于 VAD 短时能量检测在自然停顿处智能切片（50s~65s），支持两阶段断点自愈（最长 2 小时）
+- **多模型服务商架构**：支持 OpenAI Audio 规范与 Chat 规范，预设 MiMo、硅基流动、Groq、OpenAI、本地自建及自定义 API
+- **结果导出**：支持一键复制，支持选择目录分别导出各文件的同名 `.txt` 或合并导出汇总文件
 
 ## 快速开始
 
@@ -45,11 +44,11 @@ flutter build apk --release
 
 ### 4. 使用
 
-1. 打开应用，点击右上角齿轮图标配置 API Key
-2. 点击音频上传区域选择 wav、mp3 或 m4a 文件
-3. 选择语言（推荐自动检测）
-4. 点击"开始识别"等待结果（超过单次上传上限的长录音会自动分段并行转写，界面显示"正在转写 x/N 段"进度，最长 2 小时）
-5. 识别完成后可一键复制或点击下载按钮导出为 .txt
+1. 打开应用，点击右上角齿轮图标配置 API Key 与全局并发度（1~16 路）
+2. 点击"添加音频"或上传区域选择一个或多个 wav、mp3 或 m4a 文件
+3. 点击"全部开始"或单个任务的开始按钮，系统将根据全局受控并发池安全调度转写
+4. 界面卡片实时展示转码与分段进度（最长 2 小时录音自动智能切片与自愈）
+5. 识别完成后可展开卡片复制单文本、单独导出，或点击"批量导出"选择目录一键保存所有文件的同名 `.txt`
 
 ## 项目结构
 
@@ -60,16 +59,26 @@ ASR_test/
 ├── client/                  # Flutter 客户端
 │   ├── lib/
 │   │   ├── main.dart        # 入口（含桌面窗口管理）
-│   │   ├── config.dart      # 配置管理
+│   │   ├── config.dart      # 配置管理与多服务商预设
+│   │   ├── models/
+│   │   │   └── transcribe_task.dart # 任务实体与生命周期模型
 │   │   ├── services/
-│   │   │   ├── asr_service.dart     # MiMo API 调用 + 识别流程编排
-│   │   │   ├── audio_format.dart    # 格式嗅探 / MIME / 上限与分段策略（纯 Dart，可单测）
-│   │   │   ├── audio_converter.dart # → 16kHz 单声道 WAV 本地转码（系统原生解码器）
-│   │   │   └── audio_segment_transcriber.dart # 长录音 60s 分段并行转写 + 合并
+│   │   │   ├── asr_service.dart     # 双协议 ASR 调用与容灾重试编排
+│   │   │   ├── async_semaphore.dart # 全局受控并发信号量
+│   │   │   ├── batch_transcribe_manager.dart # 批量任务流调度管理器
+│   │   │   ├── batch_export_helper.dart      # 单文件/批量/合并导出辅助类
+│   │   │   ├── audio_format.dart    # 格式嗅探 / MIME / 上限与 VAD 策略
+│   │   │   ├── audio_converter.dart # → 16kHz 单声道 WAV 本地转码
+│   │   │   └── audio_segment_transcriber.dart # 长录音分段并行转写 + 协同限流退避
 │   │   └── screens/
-│   │       └── home_screen.dart  # 主界面 UI
+│   │       ├── home_screen.dart     # 自适应入口分流
+│   │       ├── windows/fluent_home_screen.dart   # Windows WinUI 3 折叠卡片流
+│   │       └── android/material_home_screen.dart # Android Material 3 卡片流
 │   ├── test/
-│   │   └── audio_format_test.dart # 格式与上限策略单元测试
+│   │   ├── audio_format_test.dart
+│   │   ├── long_audio_fault_tolerance_test.dart
+│   │   ├── multi_provider_test.dart
+│   │   └── batch_transcribe_test.dart # 批量并发与调度单元测试
 │   └── pubspec.yaml
 ├── docs/                    # 技术文档
 │   ├── architecture.md
