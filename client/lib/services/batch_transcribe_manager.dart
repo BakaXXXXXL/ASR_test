@@ -15,21 +15,31 @@ import 'audio_segment_transcriber.dart';
 /// 统一管理多音频文件的生命周期、状态流转与全局受控并发调度。
 class BatchTranscribeManager extends ChangeNotifier {
   final AppConfig config;
+  final Dio? _customDio;
   late AsyncSemaphore _semaphore;
   final RateLimitCoordinator _rateLimiter = RateLimitCoordinator();
   late AsrService _asrService;
 
   final List<TranscribeTask> _tasks = [];
   final Map<String, AsrService> _taskServices = {};
+  bool _isDisposed = false;
 
-  BatchTranscribeManager({required this.config, AsrService? asrService}) {
+  BatchTranscribeManager({
+    required this.config,
+    AsrService? asrService,
+    Dio? dio,
+  }) : _customDio = dio ?? asrService?.dio {
     _semaphore = AsyncSemaphore(config.concurrency);
-    _asrService = asrService ??
-        AsrService(
-          config,
-          semaphore: _semaphore,
-          sharedRateLimiter: _rateLimiter,
-        );
+    _asrService = asrService ?? _createService();
+  }
+
+  AsrService _createService() {
+    return AsrService(
+      config,
+      dio: _customDio,
+      semaphore: _semaphore,
+      sharedRateLimiter: _rateLimiter,
+    );
   }
 
   List<TranscribeTask> get tasks => List.unmodifiable(_tasks);
@@ -63,11 +73,7 @@ class BatchTranscribeManager extends ChangeNotifier {
   void updateConfig() {
     _semaphore = AsyncSemaphore(config.concurrency);
     _asrService.dispose();
-    _asrService = AsrService(
-      config,
-      semaphore: _semaphore,
-      sharedRateLimiter: _rateLimiter,
-    );
+    _asrService = _createService();
     notifyListeners();
   }
 
@@ -180,11 +186,7 @@ class BatchTranscribeManager extends ChangeNotifier {
 
     // 为每个任务分配专属 AsrService 实例，避免不同任务间 _activeSession 冲突
     _taskServices[id]?.dispose();
-    final service = AsrService(
-      config,
-      semaphore: _semaphore,
-      sharedRateLimiter: _rateLimiter,
-    );
+    final service = _createService();
     _taskServices[id] = service;
 
     notifyListeners();
@@ -330,7 +332,15 @@ class BatchTranscribeManager extends ChangeNotifier {
   }
 
   @override
+  void notifyListeners() {
+    if (!_isDisposed) {
+      super.notifyListeners();
+    }
+  }
+
+  @override
   void dispose() {
+    _isDisposed = true;
     cancelAll();
     _asrService.dispose();
     for (final service in _taskServices.values) {

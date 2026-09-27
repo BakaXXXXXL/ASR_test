@@ -111,6 +111,7 @@ class AsrService {
   final RateLimitCoordinator? sharedRateLimiter;
   TranscribeSession? _activeSession;
 
+  Dio get dio => _dio;
   TranscribeSession? get activeSession => _activeSession;
 
   AsrService(
