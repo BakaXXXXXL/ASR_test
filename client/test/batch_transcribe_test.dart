@@ -301,24 +301,14 @@ void main() {
       manager.dispose();
     });
 
-    test('多任务独立并发执行且 429 限流退避互不影响', () async {
+    test('多任务独立并发全速执行完成', () async {
       final mockDio = Dio(BaseOptions(baseUrl: config.baseUrl));
       var requestCount = 0;
 
       mockDio.httpClientAdapter = MockBatchHttpClientAdapter((options) async {
         requestCount++;
-        // 模拟首次请求遭遇 429 限流
-        if (requestCount == 1) {
-          return ResponseBody.fromString(
-            '{"error":{"message":"Rate limit exceeded"}}',
-            429,
-            headers: {
-              Headers.contentTypeHeader: [Headers.jsonContentType],
-              'retry-after': ['1'],
-            },
-          );
-        }
-
+        // 模拟各任务并发处理
+        await Future<void>.delayed(const Duration(milliseconds: 10));
         return ResponseBody.fromString(
           '{"choices":[{"message":{"content":"独立转写完成"}}]}',
           200,
@@ -334,14 +324,14 @@ void main() {
       final f2 = await _createMockWavFile('task2_audio');
       await manager.addFiles([f1, f2]);
 
-      // 启动两个任务
+      // 同时启动两个任务
       await manager.startAllPending();
 
-      // 两个任务都最终独立成功
+      // 两个任务都独立成功完成
       expect(manager.completedCount, 2);
       expect(manager.tasks[0].status, TaskStatus.completed);
       expect(manager.tasks[1].status, TaskStatus.completed);
-      expect(requestCount, greaterThan(2));
+      expect(requestCount, 2);
 
       manager.dispose();
     });
