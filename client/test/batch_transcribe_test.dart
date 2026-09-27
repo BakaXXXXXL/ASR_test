@@ -11,7 +11,6 @@ import 'package:asr_client/models/transcribe_task.dart';
 import 'package:asr_client/services/asr_service.dart';
 import 'package:asr_client/services/async_semaphore.dart';
 import 'package:asr_client/services/audio_format.dart';
-import 'package:asr_client/services/batch_export_helper.dart';
 import 'package:asr_client/services/batch_transcribe_manager.dart';
 
 /// 模拟 HTTP 请求适配器，用于控制网络并发和模拟响应

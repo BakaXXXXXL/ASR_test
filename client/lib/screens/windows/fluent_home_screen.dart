@@ -61,15 +61,13 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
   }
 
   void _openSettings() {
-    showDialog<void>(
-      context: context,
-      builder: (context) => FluentSettingsDialog(
-        config: widget.config,
-        onSaved: () {
-          _manager.updateConfig();
-          setState(() {});
-        },
-      ),
+    showFluentSettingsDialog(
+      context,
+      config: widget.config,
+      onSaved: () {
+        _manager.updateConfig();
+        setState(() {});
+      },
     );
   }
 
@@ -243,7 +241,7 @@ class _FluentHomeScreenState extends State<FluentHomeScreen> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    FluentIcons.server_enclosure,
+                    FluentIcons.server,
                     size: 11,
                     color: theme.accentColor,
                   ),
